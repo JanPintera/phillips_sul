@@ -44,9 +44,9 @@ ppp <- get_eurostat("prc_ppp_ind", time_format = "num", filters = list(geo = "UK
 
 
 
-uk_pps <- data_uk %>% pivot_longer(cols = starts_with("20"), names_to="year", values_to="values") %>%
-                 mutate(year = as.numeric(year)) %>%
-                 inner_join(ppp, c("year" = "time"), suffix = c("_gbp", "_ppp")) %>%
+uk_pps <- data_uk %>% pivot_longer(cols = starts_with("20"), names_to="time", values_to="values") %>%
+                 mutate(time = as.numeric(time)) %>%
+                 inner_join(ppp, c("time"), suffix = c("_gbp", "_ppp")) %>%
                  mutate(value_pps = values_gbp / values_ppp) # For claritity a call it what it is and rename it later - the pps is just "Value" in the Eurostat dfs
 
 ## Let's use my original naming. It's now trivial but I expect some merging of the dataset above in the future
@@ -78,14 +78,17 @@ old_french <- data_old %>% left_join(changed_nuts, c('GEO' = 'code13'))  %>%
 
 ## FINAL JOINS happens here!
 complete_data <- orig_data %>% left_join(old_french, c("code" = "code16", 'time' = 'TIME')) %>%
-             mutate(value_complete = coalesce(value, as.numeric(gsub(",", "", value_old)))) %>%
-             filter(!(code %in% c("FRY3", "FRY4", "FRY5", "PT20"))) # Small territories outside of continental Europe for which we get NaNs for the Getis-Ord spatial operation below
+             filter(!(code %in% c("FRY3", "FRY4", "FRY5", "PT20"))) %>% # Small territories outside of continental Europe for which we get NaNs for the Getis-Ord spatial operation below
+             bind_rows((uk_pps %>% rename(value = value_pps, # append the uk data
+                                          code = NUTS_ID,
+                                          GEO_LABEL = region_name)) %>% select(time, code, GEO_LABEL, value)) %>%
+            mutate(value_complete = coalesce(value, as.numeric(gsub(",", "", value_old))))
 
 ################################### Getis- Ord statistics ###################################
 EU_NUTS <- gisco_get_nuts(year = "2016", epsg = "4326", cache = TRUE, update_cache = FALSE,
               cache_dir = NULL, verbose = FALSE, resolution = "60", spatialtype = "RG", country = NULL, nuts_id = NULL, nuts_level = "2") %>%
               filter(substr(NUTS_ID, start = 1, stop = 2) %in% eu_countries) %>%
-              filter(substr(NUTS_ID, start = 1, stop = 2) != "UK") %>% #TODO - add UK and delete!
+              #filter(substr(NUTS_ID, start = 1, stop = 2) != "UK") %>% #TODO - add UK and delete!
               filter(!(NUTS_ID %in% c("FRY3", "FRY4", "FRY5", "PT20"))) # Small territories outside of continental Europe for which we get NaNs for the Getis-Ord spatial operation below
   
 
@@ -145,12 +148,19 @@ for(i in 2:(length(ordering)-1))
     }
 }
 
-#### doing the initional t-test regression
+#### doing the initial t-test regression
 t_stat <- log_t_test(ordering)
 
-k_star = core(t_stat) # "The core group has k^* equal to  2"
-ordering[1:k_star] # "LU00" "IE05"
+k_star = core(t_stat) # get "Drop the highest and repeat" (t-test for 1st two is -35.89) -> I drop UKI3
 
+outlier_gr1 <- ordering[1]
+remaining <- ordering[-1]
+t_stat <- log_t_test(remaining) # I reuse this var name across the core group formation in order not to overwhelm the namespace
+k_star = core(t_stat)
+
+# k_star = 7, which means that core group is formed by six regions these are:
+remaining[1:k_star] # "LU00" "IE05" "CZ01" "BE10" "DE60" "IE06" "RO32"
+# this group is clearly converging with t value of the t-test 0.9389539 and coefficient 0.2135305
 
 ##################### Adding one country at a time to the core group: ######################
 # The procedure here is - I add one country each iteration to the k_* members of the core group, then add all the units
@@ -159,35 +169,116 @@ ordering[1:k_star] # "LU00" "IE05"
 # they remark that c_*=0 is extremely conservative and leads to higher number of clubs than is the true number
 # therefore they suggest procedure of merging at the very end the resulting clubs together
 
-tc_stat <- log_t_test_c(k_star, ordering)
+tc_stat <- log_t_test_c(k_star, remaining)
 #### Group 1:
 gr1_ind <- c(1:k_star, which(tc_stat>0))
-names_gr1<- ordering[gr1_ind]
+names_gr1<- remaining[gr1_ind]
 
-print(log_t_test_core(names_gr1))
-# As the whole group we see convergence t value of the test is -0.059 and coefficient -0.0293 suggesting conditional
-
+print(log_t_test_core(names_gr1[1:10]))
+# As the group defined by the `log_t_test_c` procedure does not convergence with t value of the test is -4.5643058 and coefficient -0.2965755 suggesting conditional
+# I try to keep only the core as Group 1, plus 4 regions that seem to be diverging from the group 2 when I try to include them:
+print(log_t_test_core(names_gr1[1:10])) # and this core group converges: t value of the test: 0.11267325, coeff.: 0.01935022
+#gr1_ind = 1:k_star # possibility to take only the code
+gr1_ind = 1:10 # this is chosen somewhat arbitrarily, 
+names_gr1<- remaining[gr1_ind]
 
 ######################## Second convergence group formation: ##########################
 # First of all I perform a test of overall convergence in this remaining group:
-remaining<- ordering[-gr1_ind]
-print(log_t_test_core(remaining)) 
-# We receive t value of -23.5141287 and coefficient -0.8625014 -> the null of overall convergence in this remaining group
+remaining2 <- remaining[-gr1_ind]
+print(log_t_test_core(remaining2)) 
+# We receive t value of -15.5208671 and coefficient -0.6815267 -> the null of overall convergence in this remaining group
 
 # Forming second core group:
-t_stat2 <- log_t_test(remaining)
-k_star2 <- core(t_stat2) # "The core group has k^* equal to  11"
+t_stat2 <- log_t_test(remaining2)
+k_star2 <- core(t_stat2) # "The core group has k^* equal to  12"
 
 # Adding one region a time...
-tc_stat2 <- log_t_test_c(k_star2, remaining)
+tc_stat2 <- log_t_test_c(k_star2, remaining2)
 
 gr2_ind <- c(1:k_star2, which(tc_stat2>0))
-names_gr2<- remaining[gr2_ind]
+names_gr2<- remaining2[gr2_ind]
 
-print(log_t_test_core(names_gr2))
+print(log_t_test_core(names_gr2)) # Group 2 converges with t-stat 0.9303793 and coeff. 0.1460817
 
 ################################# Third convergence group formation #####################################
-remaining2<- remaining[-gr2_ind]
+remaining3<- remaining2[-gr2_ind]
 
-print(log_t_test_core(remaining2))
-# The whole remaining group is found convergent t-stat 0.22880938, coeff: 0.02212447
+print(log_t_test_core(remaining3))
+# The whole remaining group is found non-convergent t-stat -11.0929885, coeff: -0.5549737
+
+# Forming a third core group:
+t_stat3 <- log_t_test(remaining3)
+k_star3 <- core(t_stat3) # I get "Drop the highest and repeat"
+
+# I have a new outlier
+outlier_gr3 <- remaining3[1]
+remaining3 <- remaining3[-1]
+
+t_stat3 <- log_t_test(remaining3)
+k_star3 <- core(t_stat3) # "The core group has k^* equal to  3"
+
+tc_stat3 <- log_t_test_c(k_star3, remaining3)
+
+gr3_ind <- c(1:k_star3, which(tc_stat3>0))
+names_gr3<- remaining3[gr3_ind]
+
+print(log_t_test_core(names_gr3)) # Group 3 converges with t-stat 1.9505306, coeff.: 0.1678917
+
+################################# Forth convergence group formation #####################################
+remaining4 <- remaining3[-gr3_ind]
+
+print(log_t_test_core(remaining4))
+# The whole remaining group is found non-convergent t-stat -8.579337 -0.472681
+
+# Forming a forth core group:
+t_stat4 <- log_t_test(remaining4)
+k_star4 <- core(t_stat4) # I get "Drop the highest and repeat"
+
+tc_stat4 <- log_t_test_c(k_star4, remaining4)
+
+gr4_ind <- c(1:k_star4, which(tc_stat4>0))
+names_gr4<- remaining4[gr4_ind]
+
+print(log_t_test_core(names_gr4)) # Group 4 converges with t-stat 0.9868163, coeff.: 0.1012206
+
+
+
+################################# Fifth convergence group formation #####################################
+remaining5 <- remaining4[-gr4_ind]
+
+print(log_t_test_core(remaining5))
+# The whole remaining group is found non-convergent -6.9056644 -0.4239206
+
+t_stat5 <- log_t_test(remaining5)
+k_star5 <- core(t_stat5) # "The core group has k^* equal to  17"
+
+tc_stat5 <- log_t_test_c(k_star5, remaining5)
+
+gr5_ind <- c(1:k_star5, which(tc_stat5>0))
+names_gr5<- remaining5[gr5_ind]
+
+print(log_t_test_core(names_gr5)) # Group 5 converges with t-stat 0.7458122 0.0919395
+
+################################# Sixth convergence group formation #####################################
+remaining6 <- remaining5[-gr5_ind]
+
+print(log_t_test_core(remaining6))
+# The whole remaining group is found non-convergent -3.4922516, coeff: -0.2529671
+
+t_stat6 <- log_t_test(remaining6)
+k_star6 <- core(t_stat6)
+
+tc_stat6 <- log_t_test_c(k_star6, remaining6)
+
+gr6_ind <- c(1:k_star6, which(tc_stat6>0))
+names_gr6<- remaining6[gr6_ind]
+
+print(log_t_test_core(names_gr6)) # Group 6 converges with t-stat 1.5301293, coeff: 0.1628613
+
+################################# Seventh convergence group formation #####################################
+remaining7 <- remaining6[-gr6_ind]
+
+print(log_t_test_core(remaining7)) # The whole remaining group is found convergent -0.96806120 -0.09627829
+
+
+################################# Checking and Merging ##############################################

@@ -100,8 +100,8 @@ log_t_test_c <- function(k_star, remaining)
   tc_stat<-c(0)
   
   for(i in (k_star+1):length(remaining)){
-    names<- remaining[c(1:k_star, i)] # NOTE this depends extremely on the previous results - here we don't have any outliers 
-    Hc_sq[[i]]<- foreach(b=c(1:k_star), .combine = 'cbind')%:% 
+    names<- remaining[c(1:k_star, i)]
+    Hc_sq[[i]]<- foreach(b=c(1:k_star+1), .combine = 'cbind')%:% 
       foreach(a=unique(log_y_test$TIME), .combine='c') %do% {
         H(a,b, names)
       }
