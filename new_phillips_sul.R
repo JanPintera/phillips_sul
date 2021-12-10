@@ -6,6 +6,9 @@ library(rgdal)
 library(giscoR)
 library(foreach)
 library(tidyr)
+library(ggplot2)
+library(tidyverse)
+library(arrow)
 
 source("functions.R")
 source("helper.R")
@@ -280,5 +283,83 @@ remaining7 <- remaining6[-gr6_ind]
 
 print(log_t_test_core(remaining7)) # The whole remaining group is found convergent -0.96806120 -0.09627829
 
+names_gr7 <- remaining7
 
 ################################# Checking and Merging ##############################################
+# Overall, we have 7 convergence groups and two outliers: UKI3 and BE21
+
+names_list<- list(names_gr1, names_gr2, names_gr3, names_gr4, names_gr5, names_gr6, names_gr7)
+anyDuplicated(unlist(names_list))
+
+# "BE21" - is an outlier from the second group -> I attempt merging it with the second convergence club
+names_gr2_plus <- c(names_gr2, outlier_gr3)
+
+log_t_test_core(names_gr2_plus) # the group converges with t-stat 0.7101582 and coefficient 0.1084816
+
+upd_names_gr2 <- c(names_gr2, outlier_gr3)
+
+# Basic result check:
+names_list<- list(names_gr1, upd_names_gr2, names_gr3, names_gr4, names_gr5, names_gr6, names_gr7)
+print(length(unlist(names_list))) # = 276, i.e. the original 
+anyDuplicated(unlist(names_list))
+
+#### Checking mergers of the Convergence clubs:
+
+m_stat<- c(0)
+for (i in 1:(length(names_list)-1)){
+  m_stat[i] <- log_t_test_core(unlist(c(names_list[i], names_list[i+1])))[1]
+}
+
+print(m_stat) # Based on the m-stat we cannot merge the first two clubs, but we can merge 3, 4, 5, 6
+# -> merge 3 and 4 and continue
+#log_t_test_core(c(names_gr3, names_gr4))
+
+final_names_gr3 <- c(names_gr3, names_gr4)
+
+# Adding group 5:
+log_t_test_core(c(final_names_gr3, names_gr5)) # t-stat -1.4047701 and coefficient: -0.1233501
+# This is really tight, but we add group 5 there
+
+final_names_gr3 <- c(final_names_gr3, names_gr5)
+
+# Adding group 6:
+log_t_test_core(c(final_names_gr3, names_gr6)) # no convergence: t-stat: -3.8173834
+
+
+# Do last two groups form a club?
+log_t_test_core(c(names_gr6, names_gr7)) # No, t-stat: -3.4922516 
+
+## Final results are thus:
+# UKI3 as an outlier, "BE21" is merged with the second group and groups 3, 4 and 5 are merged into one:
+convergence_clubs<- list(outlier_gr1, names_gr1, upd_names_gr2, final_names_gr3, names_gr6, names_gr7)
+
+# Check if all regions are included:
+length(unlist(convergence_clubs)) == length(ordering)
+
+############################ Plotting the clubs ######################################
+Geo_plot<- Geo_nuts2[!Geo_nuts2$NUTS_ID %in% c("FRY1","FRY2","FRY3","ES70","PT20","PT30"),]
+# TODO: investigate the projection string:
+Geo_plot <- spTransform(Geo_plot, CRS("+proj=merc +a=6378137 +b=6378137 +lat_ts=0.0 +lon_0=0.0 +x_0=0.0 +y_0=0 +k=1.0 +units=m +nadgrids=@null +no_defs"))
+Geo_club5<- tibble(Geo_plot@data) %>% add_column(Club = NA) %>% mutate(Club = as.integer(Club))
+for(i in 1:6){
+  Geo_club5[Geo_club5$NUTS_ID %in% convergence_clubs[[i]], ]$Club <- i-1
+}
+
+## ggplot https://rpubs.com/m_dev/Intro-to-Spatial-Data-and-ggplot2
+Geo_f<-fortify(Geo_plot, region="NUTS_ID")
+#geo_club5_melt<- melt(Geo_club5[, c(1,5)], id=c("NUTS_ID"))
+Geo_ggplot<- merge(Geo_f, Geo_club5, by.x="id", by.y="NUTS_ID")
+#Geo_ggplot <- Geo_ggplot[order(Geo_ggplot$order),] 
+
+
+ggplot(data=Geo_ggplot, aes(long, lat, fill= Club, group = group
+))+geom_polygon()+coord_equal()+  theme(line = element_blank(), 
+                                        axis.text=element_blank(),
+                                        axis.title=element_blank(),
+                                        panel.background = element_blank())+
+  scale_fill_gradientn("Club:",colours= rainbow(6,start=.40, end=.63),guide = "legend")
+
+
+###################### Write-outs ##########################
+write_parquet(income_data, "data-processed/income_data.parquet")
+
