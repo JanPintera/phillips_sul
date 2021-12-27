@@ -362,4 +362,5 @@ ggplot(data=Geo_ggplot, aes(long, lat, fill= Club, group = group
 
 ###################### Write-outs ##########################
 write_parquet(income_data, "data-processed/income_data.parquet")
+write_parquet(income_data, "data-processed/convergence_clubs.parquet")
 
