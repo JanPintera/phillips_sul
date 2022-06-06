@@ -147,7 +147,7 @@ for(i in 2:(length(ordering)-1))
   h_t[[i]]<- 
     foreach(b=1:i, .combine = 'cbind')%:%
     foreach(a=unique(log_y_test$TIME), .combine='c') %do% {
-      h(a,b)
+      h(a, b, names)
     }
 }
 
@@ -336,7 +336,20 @@ convergence_clubs<- list(outlier_gr1, names_gr1, upd_names_gr2, final_names_gr3,
 # Check if all regions are included:
 length(unlist(convergence_clubs)) == length(ordering)
 
-############################ Plotting the clubs ######################################
+############################ Transition Paths #################################################
+# Enabling eventual visualization of the transition paths, by first calculation the h_t for each convergence club
+merged_ht <- get_transition_path(convergence_clubs)
+
+overall_ht<- foreach(b=c(1:length(ordering)), .combine = 'cbind')%:% 
+  foreach(a=unique(log_y_test$TIME), .combine='c') %do% {
+    h(a, b, ordering)
+}
+
+clubweight <- as_tibble(do.call(cbind, merged_ht))
+#NOTE: the tail is there to get rid of the outlier
+colnames(clubweight) <- tail(unlist(convergence_clubs), n=length(unlist(convergence_clubs))-1) #TODO: double check the ordering, clubweight df should keep ordering the convergence_clubs
+
+############################ Plotting the clubs ###############################################
 Geo_plot<- Geo_nuts2[!Geo_nuts2$NUTS_ID %in% c("FRY1","FRY2","FRY3","ES70","PT20","PT30"),]
 # TODO: investigate the projection string:
 Geo_plot <- spTransform(Geo_plot, CRS("+proj=merc +a=6378137 +b=6378137 +lat_ts=0.0 +lon_0=0.0 +x_0=0.0 +y_0=0 +k=1.0 +units=m +nadgrids=@null +no_defs"))

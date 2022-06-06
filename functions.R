@@ -55,8 +55,8 @@ y_star<- function(dat){
 
 ###### Phillips and Sul functions:
 # function generating h_it:
-h<- function(a,b){
-  act_data <- log_y_test[log_y_test$GEO %in% names & log_y_test$TIME %in% a,] 
+h <- function(a, b, names=names){
+  act_data <- log_y_test[log_y_test$GEO %in% names & log_y_test$TIME %in% a,]
   mean <- mean(act_data$Value)
   return(act_data[b,3]/mean)  
 }
@@ -142,6 +142,18 @@ core<- function(t_stat){
     }
   }
   return(k_star)
+}
+
+get_transition_path <- function(clubs){
+  ht <- list(0)
+  for(f in 1:(length(clubs)-1)){ # This assumes that the first member of the "clubs" are outliers 
+    names<- clubs[[f+1]]
+    ht[[f]]<- foreach(b=c(1:length(names)), .combine = 'cbind')%:% 
+      foreach(a=unique(log_y_test$TIME), .combine='c') %do% {
+        h(a, b, names)
+      }
+  }
+  return(ht)
 }
 
 gm_mean = function(x, na.rm=TRUE){
