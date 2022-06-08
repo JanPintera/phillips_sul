@@ -43,8 +43,10 @@ gdp_per_cap <- complete_data %>% filter(time == 2008) %>% rename(geo = code,
 ## DO: K = Financial and insurance activities,
 ##     J = Information and communication, A = Agriculture, forestry and fishing, B-E = Industry (except construction)
 ##     G-I = Wholesale and retail trade, transport, accommodation and food service activities
+##     R-U = Arts, entertainment and recreation; other service activities; activities of household and extra-territorial organizations and bodies
+##     L = Real estate activities
 specialisation_emp <- get_eurostat("lfst_r_lfe2en2", time_format = "num", type = "code",
-                                                     filters=list(nace_r2 = c("A", "B-E", "K", "J", "G-I"), 
+                                                     filters=list(nace_r2 = c("A", "B-E", "K", "J", "G-I", "R-U", "L"), 
                                                                   age="Y15-64", sex='T',
                                                                   time=c(2008:2019)))
                                                                                                    
@@ -66,10 +68,9 @@ for( i in seq_along(specialisation))
   
   nace <- specialisation[[i]]  %>% distinct(nace_r2) %>% pull()
   print(nace)
-  spec_select <- specialisation[[i]] %>% select(-nace_r2)
+  spec_select <- specialisation[[i]] %>% select(-nace_r2) %>% rename_with(.fn = ~paste('spec', nace, sep="_"), .cols=spec)
   exo_data <- exo_data %>%
-                left_join(spec_select, by= c("geo", "time"),
-                          suffix = c("", paste('_', nace, sep="")))
+                left_join(spec_select, by= c("geo", "time"))
 }
 
 ### BS
@@ -119,8 +120,10 @@ metro_region_typology <- read_excel("Metro-regions-NUTS-2016.xlsx",
                           rename(nuts3 = NUTS_ID, reg_name = `Name of the metro region`) %>%
                           mutate(nuts2 = substr(nuts3, 1, nchar(nuts3)-1))
                           #distinct(nuts2) # this is slightly pointless, 223 nuts2 regions have a metro areas, almost everyone
+# Alternative: CATG_URBRU_REGIO - using three levels urban, intermediate rural
 
 capitals <- metro_region_typology %>% filter(reg_name %in% capital_cities) %>% distinct(nuts2) %>% pull
+metro_regions <- metro_region_typology %>% distinct(nuts2) %>% pull
 
 # European Quality of Government Index (EQI): https://www.gu.se/en/quality-government/qog-data/data-downloads/data-archive
 gov_quality <- read_csv("qog_eqi_agg_2017.csv") %>% 
@@ -138,8 +141,9 @@ wreg_df <- enframe(wreg, name = "geo", value = "wreg")
 ################################# The estimation itself - merged clubs: ###############################################
 regression_data <- exo_data %>% filter(time == 2008 & Club > 0) %>% # Taking year 2008 - the crisis year, as an initial point for  the specialization variables
                    mutate(Club = as.factor(Club)) %>% 
-                   rename(spec_A = spec, spec_BE = `spec_B-E`, spec_GI = `spec_G-I`) %>%
+                   rename(spec_BE = `spec_B-E`, spec_GI = `spec_G-I`, spec_RU = `spec_R-U`) %>%
                    mutate(capital = ifelse(geo %in% capitals, 1, 0)) %>% # Capital cities dummy
+                   mutate(metro = ifelse(geo %in% metro_regions, 1, 0)) %>%
                    mutate(old_members = ifelse(substr(geo, 1, 2) %in% EU15, 1, 0)) %>%
                    left_join(pop_growth) %>% # will be joined by geo
                    left_join(scientists) %>%
@@ -149,7 +153,8 @@ regression_data <- exo_data %>% filter(time == 2008 & Club > 0) %>% # Taking yea
                    left_join(gfcf) %>%
                    left_join(wreg_df) %>%
                    left_join(gdp_per_cap)
-  
+
+sum(complete.cases(regression_data)) # missigness problems
 ################################# Imputation - FAMD #########################################################
 
 famd <- imputeFAMD(regression_data %>% select(-any_of(c("time", "Club", "geo"))),
@@ -170,9 +175,9 @@ knn <- knnImputation(regression_data %>% select(-any_of(c("time", "Club", "geo")
 
 formula_all <- Club ~ log_init_gdp +
                       gfcf +
-                      pop_growth +
-                      y_o + spec_A  + spec_J + spec_K + spec_BE + spec_GI + BS +
-                      scientists_share + capital + old_members + eqi_score
+                      pop_growth + y_o +
+                      spec_A  + spec_J + spec_K + spec_BE + spec_GI + + spec_L + spec_RU +
+                      BS + scientists_share + capital + metro + old_members + eqi_score
 
 # Using init conditions - either 2008 or first available, the format is `init_variable`, spec vars are in the init form always
 formula_init <- Club ~ log_init_gdp +
@@ -180,8 +185,8 @@ formula_init <- Club ~ log_init_gdp +
                        init_pop_growth +
                        init_y_o +
                        init_BS +
-                       spec_A  + spec_J + spec_K + spec_BE + spec_GI  +
-                       init_scientists_share +capital + old_members + eqi_score
+                       spec_A  + spec_J + spec_K + spec_BE + spec_GI  + spec_L + spec_RU +
+                       init_scientists_share +capital + metro + old_members + eqi_score
 
 # Some basic look - using polr
 model <- polr(formula_all, 
