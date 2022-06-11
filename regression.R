@@ -39,14 +39,16 @@ gdp_per_cap <- complete_data %>% filter(time == 2008) %>% rename(geo = code,
                                                           mutate(log_init_gdp = log(init_gdp)) %>%
                                                           select(geo, log_init_gdp)
 
-## Specialization
+#### Specialization
 ## DO: K = Financial and insurance activities,
-##     J = Information and communication, A = Agriculture, forestry and fishing, B-E = Industry (except construction)
+##     J = Information and communication (largely contained in the BS below),
+##     A = Agriculture, forestry and fishing, B-E = Industry (except construction)
 ##     G-I = Wholesale and retail trade, transport, accommodation and food service activities
 ##     R-U = Arts, entertainment and recreation; other service activities; activities of household and extra-territorial organizations and bodies
 ##     L = Real estate activities
+
 specialisation_emp <- get_eurostat("lfst_r_lfe2en2", time_format = "num", type = "code",
-                                                     filters=list(nace_r2 = c("A", "B-E", "K", "J", "G-I", "R-U", "L"), 
+                                                     filters=list(nace_r2 = c("A", "B-E", "K", "G-I", "R-U", "L"), 
                                                                   age="Y15-64", sex='T',
                                                                   time=c(2008:2019)))
                                                                                                    
@@ -73,16 +75,22 @@ for( i in seq_along(specialisation))
                 left_join(spec_select, by= c("geo", "time"))
 }
 
-### BS
+#### Business Services
+# NOTE: sbs_r_nuts06_r2 provide different totals than in `specialisation_total`, therefore I use the 
+specialisation_total_sbs <- get_eurostat("sbs_r_nuts06_r2", time_format = "num", type = "code", 
+                                         filters = list(indic_sb="V16110", nace_r2=c("B", "C", "D", "E", "F", "G", "H", "I", "J", "L", "M", "N", "S95"), 
+                                                        time = c(2008:2019))) %>% filter(geo %in% nuts2_regions) %>%
+                            group_by(geo, time) %>% summarise(values = sum(values, na.rm = TRUE))
+
 bs <- get_eurostat("sbs_r_nuts06_r2", time_format = "num", type = "code", 
-                   filters = list(indic_sb="V16110",nace_r2=c("J58","J62", "J63","M69", "M70","M71","M73","N78"), 
+                   filters = list(indic_sb="V16110", nace_r2=c("J58","J62", "J63","M69", "M70","M71","M73","N78"), 
                    time = c(2008:2019))) %>% filter(geo %in% nuts2_regions) %>%
-                   group_by(geo, time) %>% summarise(bs_emp = sum(values)/10^3) %>%
-                   inner_join(specialisation_total, by = c("geo", "time"), 
+                   group_by(geo, time) %>% summarise(bs_emp = sum(values)) %>%
+                   inner_join(specialisation_total_sbs, by = c("geo", "time"), 
                    suffix = c("", "_total")) %>%
                    mutate(spec_bs = bs_emp/values) %>%
-                   group_by(geo) %>% summarise(BS = mean(spec_bs, na.rm = TRUE),
-                                               init_BS = first(spec_bs, order_by = time))
+                   group_by(geo) %>% summarise(BS_avg = mean(spec_bs, na.rm = TRUE),
+                                               BS = first(spec_bs, order_by = time)) #keep naming convention of the other spec vars - they are by default 2008 values
 
 
 pop_growth <- get_eurostat("demo_r_gind3", time_format = "num", 
@@ -107,6 +115,17 @@ scientists<- get_eurostat("rd_p_persreg", time_format = "num",
                          group_by(geo) %>% summarise(scientists_share = mean(values, na.rm = TRUE),
                                                      init_scientists_share = first(na.omit(values), order_by = time)) #NOTE: we have quite a few missiong here, I take first non-null value
 
+patents <- get_eurostat("pat_ep_rtot", time_format = "num", type = "code", filters=list(unit="P_MHAB",
+                                                                                     time=c(2008:2012))) %>%
+           filter(geo %in% nuts2_regions) %>% group_by(geo) %>% summarise(patents = mean(values, na.rm = TRUE),
+                                                                      patents_init = first(values, order_by = time))
+
+# European and Regional Innovation Scoreboards 2021
+inno_index <- read_excel("EIS_Data.xlsx") %>% rename(geo = Region, time = Year, values = Value) %>%
+                                              filter(geo %in% nuts2_regions) %>%
+                                              group_by(geo) %>% summarise(inno = mean(values, na.rm = TRUE),
+                                                                          inno_init = first(values, order_by = time))
+
 # Gross fixed capital formation
 gfcf <- get_eurostat('nama_10r_2gfcf', time_format = "num", type = "code",
                      filters = list(currency = "MIO_EUR", nace_r2 = "TOTAL", time=c(2008:2019))) %>%
@@ -120,17 +139,27 @@ metro_region_typology <- read_excel("Metro-regions-NUTS-2016.xlsx",
                           rename(nuts3 = NUTS_ID, reg_name = `Name of the metro region`) %>%
                           mutate(nuts2 = substr(nuts3, 1, nchar(nuts3)-1))
                           #distinct(nuts2) # this is slightly pointless, 223 nuts2 regions have a metro areas, almost everyone
-# Alternative: CATG_URBRU_REGIO - using three levels urban, intermediate rural
 
 capitals <- metro_region_typology %>% filter(reg_name %in% capital_cities) %>% distinct(nuts2) %>% pull
 metro_regions <- metro_region_typology %>% distinct(nuts2) %>% pull
+
+# Alternative: CATG_URBRU_REGIO - using three levels urban (1), intermediate (2) and rural (3)
+urban_rural <- read_excel("Urban-rural typology of NUTS3 regions (NUTS v. 2016).xlsx",
+                          sheet = "Urban-rural typology 2016") %>% 
+                          rename(nuts3 = NUTS_ID, urb_rurl_class = URB_RURAL_CLASS) %>%
+                          mutate(nuts2 = substr(nuts3, 1, nchar(nuts3)-1)) %>% filter(nuts2 %in% nuts2_regions) %>%
+                          group_by(nuts2) %>% summarise(agg_urb_class = min(urb_rurl_class)) # i.e., e.g. if at least one urban nuts3 region (=1) present the whole nuts2 is urban.
+
+urban_regions <- urban_rural %>% filter(agg_urb_class == 1) %>% distinct(nuts2) %>% pull
+rural_regions <- urban_rural %>% filter(agg_urb_class == 3) %>% distinct(nuts2) %>% pull
 
 # European Quality of Government Index (EQI): https://www.gu.se/en/quality-government/qog-data/data-downloads/data-archive
 gov_quality <- read_csv("qog_eqi_agg_2017.csv") %>% 
                filter((nuts %in% nuts2_regions) | (nuts %in% nuts1_regions)) %>%
                left_join(nuts_mapping, by = c("nuts"="nuts1_regions")) %>%
                mutate(geo = coalesce(nuts2_regions, nuts)) %>%
-               filter(year == 2017) %>% select(geo, eqi_score)
+               filter(year == 2010) %>% # last av. is 2017
+               select(geo, eqi_score)
 
 
 ################################ Regression weights ############################################
@@ -144,6 +173,8 @@ regression_data <- exo_data %>% filter(time == 2008 & Club > 0) %>% # Taking yea
                    rename(spec_BE = `spec_B-E`, spec_GI = `spec_G-I`, spec_RU = `spec_R-U`) %>%
                    mutate(capital = ifelse(geo %in% capitals, 1, 0)) %>% # Capital cities dummy
                    mutate(metro = ifelse(geo %in% metro_regions, 1, 0)) %>%
+                   mutate(urban = ifelse(geo %in% urban_regions, 1, 0)) %>%
+                   mutate(rural = ifelse(geo %in% rural_regions, 1, 0)) %>%
                    mutate(old_members = ifelse(substr(geo, 1, 2) %in% EU15, 1, 0)) %>%
                    left_join(pop_growth) %>% # will be joined by geo
                    left_join(scientists) %>%
@@ -152,7 +183,10 @@ regression_data <- exo_data %>% filter(time == 2008 & Club > 0) %>% # Taking yea
                    left_join(y_o) %>%
                    left_join(gfcf) %>%
                    left_join(wreg_df) %>%
-                   left_join(gdp_per_cap)
+                   left_join(gdp_per_cap) %>%
+                   left_join(patents) %>%
+                   left_join(inno_index)
+  
 
 sum(complete.cases(regression_data)) # missigness problems
 ################################# Imputation - FAMD #########################################################
@@ -160,7 +194,6 @@ sum(complete.cases(regression_data)) # missigness problems
 famd <- imputeFAMD(regression_data %>% select(-any_of(c("time", "Club", "geo"))),
                    ncp=3, scale=TRUE)$completeObs
 famd[, c("time", "Club", "geo")] <- regression_data[, c("time", "Club", "geo")]
-
 
 
 ################################ Imputation - kNN ################################################
@@ -173,20 +206,38 @@ knn <- knnImputation(regression_data %>% select(-any_of(c("time", "Club", "geo")
 ## Most interesting seems probably the result for industry (compare to the Cutrini's industrial core stuff)
 ## The emphasis on scientists seem to be confirmed
 
+#### DESCRIPTIVE ANALYSIS
+
+#### FORMULAS
+
 formula_all <- Club ~ log_init_gdp +
                       gfcf +
                       pop_growth + y_o +
-                      spec_A  + spec_J + spec_K + spec_BE + spec_GI + + spec_L + spec_RU +
-                      BS + scientists_share + capital + metro + old_members + eqi_score
+                      spec_A  + spec_K + spec_BE + spec_GI + + spec_L + spec_RU + BS + 
+                      scientists_share + patents + inno +
+                      capital + metro + urban + rural +
+                      old_members + eqi_score
 
 # Using init conditions - either 2008 or first available, the format is `init_variable`, spec vars are in the init form always
 formula_init <- Club ~ log_init_gdp +
                        init_gfcf +
-                       init_pop_growth +
-                       init_y_o +
-                       init_BS +
-                       spec_A  + spec_J + spec_K + spec_BE + spec_GI  + spec_L + spec_RU +
-                       init_scientists_share +capital + metro + old_members + eqi_score
+                       init_pop_growth + init_y_o +
+                       spec_A + spec_K + spec_BE + spec_GI  + spec_L + spec_RU + BS +
+                       init_scientists_share + patents_init + inno_init + 
+                       capital + metro + urban + rural +
+                       old_members + eqi_score
+                       
+# Formula using specifically chosen limited set of variables
+formula_spec_plus <- Club ~ log_init_gdp +
+                                init_gfcf +
+                                spec_A + spec_K + spec_BE + spec_GI  + spec_L + spec_RU + BS +
+                                inno_init + 
+                                urban + rural
+                                eqi_score
+                                
+# Formula showing changes    
+                                
+#### ESTIMATION                                
 
 # Some basic look - using polr
 model <- polr(formula_all, 
