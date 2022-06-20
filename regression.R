@@ -10,6 +10,7 @@ library(missMDA)
 library(stargazer)
 library(DMwR)
 library(oglmx)
+library(corrplot)
 
 
 source("functions.R")
@@ -75,6 +76,12 @@ for( i in seq_along(specialisation))
                 left_join(spec_select, by= c("geo", "time"))
 }
 
+# Getting diffs of the spec vars to be later joined with the exo_data
+spec_deltas <- exo_data %>% filter(time >= 2008) %>%
+               group_by(geo) %>% summarise_at(vars(starts_with('spec')),
+                                                   funs(last(na.omit(.), order_by = time) - 
+                                                          first(na.omit(.), order_by = time))) %>%
+                                 rename(spec_BE = `spec_B-E`, spec_GI = `spec_G-I`, spec_RU = `spec_R-U`)
 #### Business Services
 # NOTE: sbs_r_nuts06_r2 provide different totals than in `specialisation_total`, therefore I use the 
 specialisation_total_sbs <- get_eurostat("sbs_r_nuts06_r2", time_format = "num", type = "code", 
@@ -85,19 +92,20 @@ specialisation_total_sbs <- get_eurostat("sbs_r_nuts06_r2", time_format = "num",
 bs <- get_eurostat("sbs_r_nuts06_r2", time_format = "num", type = "code", 
                    filters = list(indic_sb="V16110", nace_r2=c("J58","J62", "J63","M69", "M70","M71","M73","N78"), 
                    time = c(2008:2019))) %>% filter(geo %in% nuts2_regions) %>%
-                   group_by(geo, time) %>% summarise(bs_emp = sum(values)) %>%
+                   group_by(geo, time) %>% summarise(bs_emp = sum(values, na.rm = TRUE)) %>%
                    inner_join(specialisation_total_sbs, by = c("geo", "time"), 
                    suffix = c("", "_total")) %>%
                    mutate(spec_bs = bs_emp/values) %>%
                    group_by(geo) %>% summarise(BS_avg = mean(spec_bs, na.rm = TRUE),
-                                               BS = first(spec_bs, order_by = time)) #keep naming convention of the other spec vars - they are by default 2008 values
-
+                                               BS = first(na.omit(spec_bs), order_by = time), #keep naming convention of the other spec vars - they are by default 2008 values
+                                               delta_BS = last(na.omit(spec_bs), order_by = time) - first(na.omit(spec_bs), order_by = time))
 
 pop_growth <- get_eurostat("demo_r_gind3", time_format = "num", 
                            type = "code", filters = list(indic_de="GROWRT", time=c(2008:2019))) %>%
                           filter(geo %in% nuts2_regions) %>%
                           group_by(geo) %>% summarise(pop_growth = gm_mean(values),
-                                                      init_pop_growth = first(values, order_by = time))
+                                                      init_pop_growth = first(values, order_by = time),
+                                                      delta_pop_growth = last(values, order_by = time) - first(values, order_by = time))
 
 
 y_o <- get_eurostat("demo_r_pjanaggr3", time_format = "num", type = "code", filters = list(age = c("Y_LT15", "Y_GE65"),
@@ -105,7 +113,8 @@ y_o <- get_eurostat("demo_r_pjanaggr3", time_format = "num", type = "code", filt
                                         pivot_wider(names_from = age, values_from = values) %>%
                                         mutate(y_o_ratio = Y_LT15/Y_GE65) %>%
                                         group_by(geo) %>% summarise(y_o = mean(y_o_ratio),
-                                                                    init_y_o = first(y_o_ratio, order_by = time))
+                                                                    init_y_o = first(y_o_ratio, order_by = time),
+                                                                    delta_y_o = last(y_o_ratio, order_by = time) - first(y_o_ratio, order_by = time))
 
 
 scientists<- get_eurostat("rd_p_persreg", time_format = "num", 
@@ -113,25 +122,40 @@ scientists<- get_eurostat("rd_p_persreg", time_format = "num",
                                                        time=c(2008:2019), unit="PC_ACT_FTE")) %>%
                          filter(geo %in% nuts2_regions) %>%
                          group_by(geo) %>% summarise(scientists_share = mean(values, na.rm = TRUE),
-                                                     init_scientists_share = first(na.omit(values), order_by = time)) #NOTE: we have quite a few missiong here, I take first non-null value
+                                                     init_scientists_share = first(na.omit(values), order_by = time), #NOTE: we have quite a few missing here, I take first non-null value
+                                                     delta_scientist_share = last(na.omit(values), order_by = time) - first(na.omit(values), order_by = time))
+
+tertiary_educated <- get_eurostat("edat_lfse_04", time_format = "num", 
+                        type = "code",filters = list(isced11="ED5-8", time=c(2008:2019), sex="T")) %>%
+                     group_by(geo) %>% summarize(ter_edu = mean(values, na.rm = TRUE),
+                                                 init_ter_edu = first(na.omit(values), order_by = time),
+                                                 delta_ter_edu = last(values, order_by = time) - first(values, order_by = time))
+
 
 patents <- get_eurostat("pat_ep_rtot", time_format = "num", type = "code", filters=list(unit="P_MHAB",
                                                                                      time=c(2008:2012))) %>%
            filter(geo %in% nuts2_regions) %>% group_by(geo) %>% summarise(patents = mean(values, na.rm = TRUE),
-                                                                      patents_init = first(values, order_by = time))
+                                                                          init_patents = first(values, order_by = time),
+                                                                          delta_patents = last(values, order_by = time) - first(values, order_by = time))
 
 # European and Regional Innovation Scoreboards 2021
-inno_index <- read_excel("EIS_Data.xlsx") %>% rename(geo = Region, time = Year, values = Value) %>%
-                                              filter(geo %in% nuts2_regions) %>%
-                                              group_by(geo) %>% summarise(inno = mean(values, na.rm = TRUE),
-                                                                          inno_init = first(values, order_by = time))
+inno_index <- read_excel("EIS_Data.xlsx") %>% rename(nuts = Region, time = Year, values = Value) %>%
+                                               filter((nuts %in% nuts2_regions | nuts %in% nuts1_regions) & time <= 2019 & Indicator == "0 Summary Innovation Index") %>%
+                                               left_join(nuts_mapping, by = c("nuts"="nuts1_regions")) %>%
+                                               mutate(geo = coalesce(nuts2_regions, nuts)) %>%
+                                               mutate(values = values / 100) %>% #TODO: this is an ad-hoc rescalling, consider using full standartization (z-score, see below)
+                                               group_by(geo) %>% summarise(inno = mean(values, na.rm = TRUE),
+                                                                          init_inno = first(values, order_by = time),
+                                                                          delta_inno = last(values, order_by = time) - first(values, order_by = time))
 
 # Gross fixed capital formation
 gfcf <- get_eurostat('nama_10r_2gfcf', time_format = "num", type = "code",
                      filters = list(currency = "MIO_EUR", nace_r2 = "TOTAL", time=c(2008:2019))) %>%
                      filter(geo %in% nuts2_regions) %>%
                      group_by(geo) %>% summarise(gfcf = mean(values, na.rm = TRUE)/1000,
-                                                 init_gfcf = first(values)/1000)
+                                                 init_gfcf = first(values)/1000,
+                                                 delta_gfcf = last(values, order_by = time)/1000 - first(values, order_by = time)/1000
+                                                )
 
 
 metro_region_typology <- read_excel("Metro-regions-NUTS-2016.xlsx", 
@@ -158,9 +182,11 @@ gov_quality <- read_csv("qog_eqi_agg_2017.csv") %>%
                filter((nuts %in% nuts2_regions) | (nuts %in% nuts1_regions)) %>%
                left_join(nuts_mapping, by = c("nuts"="nuts1_regions")) %>%
                mutate(geo = coalesce(nuts2_regions, nuts)) %>%
-               filter(year == 2010) %>% # last av. is 2017
-               select(geo, eqi_score)
-
+               group_by(geo) %>% summarise(
+                 eqi = mean(eqi_score, na.rm = TRUE),
+                 init_eqi = first(eqi_score, order_by = year),
+                 delta_eqi = last(eqi_score, order_by = year) - first(eqi_score, order_by = year)
+               )
 
 ################################ Regression weights ############################################
 clubweight <- clubweight %>% select(order(colnames(clubweight))) # NOTE! this has to have the same order as regression_data below
@@ -176,7 +202,9 @@ regression_data <- exo_data %>% filter(time == 2008 & Club > 0) %>% # Taking yea
                    mutate(urban = ifelse(geo %in% urban_regions, 1, 0)) %>%
                    mutate(rural = ifelse(geo %in% rural_regions, 1, 0)) %>%
                    mutate(old_members = ifelse(substr(geo, 1, 2) %in% EU15, 1, 0)) %>%
+                   left_join(spec_deltas, by=c("geo"), suffix=c("", "_delta")) %>%
                    left_join(pop_growth) %>% # will be joined by geo
+                   left_join(tertiary_educated) %>%
                    left_join(scientists) %>%
                    left_join(gov_quality) %>%
                    left_join(bs) %>%
@@ -200,6 +228,12 @@ famd[, c("time", "Club", "geo")] <- regression_data[, c("time", "Club", "geo")]
 knn <- knnImputation(regression_data %>% select(-any_of(c("time", "Club", "geo"))))
 
 
+
+################################ Variable Standardization ####################################
+normalized_data <- apply(regression_data %>% select(-c("Club", "geo", "time", "capital", "metro", "urban", "rural", "old_members")),
+                                 2, scale) # substracting mean and dividing by standart deviation for each column = z-score
+summary(normalized_data)
+
 ################################# Regression ##############################################
 ## Results: significant are young and old ratio (y\_o), spec\_BE = Industry (except construction),
 ## BS, scientist_share, somewhat also eqi_score
@@ -207,37 +241,75 @@ knn <- knnImputation(regression_data %>% select(-any_of(c("time", "Club", "geo")
 ## The emphasis on scientists seem to be confirmed
 
 #### DESCRIPTIVE ANALYSIS
+summary(regression_data %>% select(-c("capital", "metro", "urban", "rural", "old_members")))
+
+summary(famd %>% select(-c("capital", "metro", "urban", "rural", "old_members")))
+
+# Dummy variables - contingency tables
+lapply(regression_data[, c("Club", "capital", "metro", "urban", "rural", "old_members")], table)
+
+ftable(xtabs(~ Club + capital + metro + urban + rural + old_members,
+             data = regression_data))
+
+# Correlation matrices
+regression_data_corr <- regression_data %>% select(-c(geo, time)) %>% mutate(Club = as.integer(Club))
+cor(regression_data_corr, use = "complete.obs")
+
+corrplot(
+  cor(regression_data_corr %>% select(!starts_with('init')), use = "complete.obs")
+)
+
 
 #### FORMULAS
-
+# i.e.listing the "basic" versions of the variables = init conditions for specs and mean for the others
+# NOTE: this is meant more as an overview than anything else the polr does not converge
 formula_all <- Club ~ log_init_gdp +
                       gfcf +
                       pop_growth + y_o +
                       spec_A  + spec_K + spec_BE + spec_GI + + spec_L + spec_RU + BS + 
-                      scientists_share + patents + inno +
+                      scientists_share + patents + inno + ter_edu +
                       capital + metro + urban + rural +
-                      old_members + eqi_score
+                      old_members + eqi
 
 # Using init conditions - either 2008 or first available, the format is `init_variable`, spec vars are in the init form always
 formula_init <- Club ~ log_init_gdp +
                        init_gfcf +
                        init_pop_growth + init_y_o +
                        spec_A + spec_K + spec_BE + spec_GI  + spec_L + spec_RU + BS +
-                       init_scientists_share + patents_init + inno_init + 
+                       init_scientists_share + init_patents + init_inno + init_ter_edu +
                        capital + metro + urban + rural +
-                       old_members + eqi_score
+                       old_members + init_eqi
+
                        
-# Formula using specifically chosen limited set of variables
+# Formula using specifically chosen limited set of variables - the specialisations (wo Real Estate), Eurostat innovation index, Quality of governance and urban/rural distinction
 formula_spec_plus <- Club ~ log_init_gdp +
-                                init_gfcf +
-                                spec_A + spec_K + spec_BE + spec_GI  + spec_L + spec_RU + BS +
-                                inno_init + 
-                                urban + rural
-                                eqi_score
+                            spec_A + spec_K + spec_BE + spec_GI   + spec_RU + BS +
+                            init_inno + 
+                            urban + rural +
+                            init_eqi
+
+# Version of formula without variables with a lot of missing vars - robustness check
+# vars with a lot of missing stuff = spec_L, init_inno
+formula_init_nans <- Club ~ log_init_gdp +
+                     spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS +
+                     init_inno + 
+                     urban + rural +
+                     init_eqi
                                 
-# Formula showing changes    
+# Formula showing changes
+                            
+formula_delta <- Club ~ delta_gfcf +
+                 spec_A_delta + spec_K_delta + spec_BE_delta + spec_GI_delta  + spec_L_delta + spec_RU_delta + delta_BS +
+                 delta_inno + 
+                 urban + rural +
+                 delta_eqi
                                 
-#### ESTIMATION                                
+#### ESTIMATION
+#model_test <- polr(formula_spec_plus, 
+#                   data = regression_data, method=c("logistic"), Hess = TRUE)
+#summary(model_test)
+#ocME(model_test)$out
+
 
 # Some basic look - using polr
 model <- polr(formula_all, 
@@ -245,9 +317,11 @@ model <- polr(formula_all,
 summary(model)
 marginal <- ocME(model)$out
 
-# init model - too many missing obs.
-#model_init <- polr(formula_init, 
-#                   data = regression_data, method=c("logistic"), Hess = TRUE)
+
+model_selected <- polr(formula_spec_plus, 
+                       data = regression_data, method=c("logistic"), Hess = TRUE)
+summary(model_selected)
+ocME(model_selected)$out
 
 
 ### Imputed FAMD:
@@ -257,12 +331,22 @@ summary(model_famd) # stargazer(famd_marginal$out$ME.all) for latex print-out
 famd_marginal <- ocME(model_famd)$out
 
 
+### FAMD - selected variables
+model_famd_selected <- polr(formula_spec_plus, data = famd, method=c("logistic"), Hess = TRUE)
+summary(model_famd_selected) # stargazer(famd_marginal$out$ME.all) for latex print-out
+famd_selected_marginal <- ocME(model_famd_selected)$out
+
 ### FAMD - initial conditions
 model_famd_init <- polr(formula_init, data = famd, method=c("logistic"), Hess = TRUE)
 summary(model_famd_init)
 ocME(model_famd_init)$out
+
+### FAMD - deltas
+model_famd_delta <- polr(formula_delta, data = famd, method=c("logistic"), Hess = TRUE)
+summary(model_famd_delta)
+ocME(model_famd_delta)
 ############# Weighted
-model_w <- polr(formula_all,data = regression_data, method = c("logistic"),
+model_w <- polr(formula_all, data = regression_data, method = c("logistic"),
                 weights = wreg, Hess = TRUE)
 summary(model_w)
 margins_w <- ocME(model_w)$out
@@ -272,6 +356,12 @@ model_famd_w <- polr(formula_all, data = famd, method=c("logistic"), weights = w
                      Hess = TRUE)
 summary(model_famd_w) # stargazer(famd_marginal$out$ME.all) for latex print-out
 famd_marginal_w <- ocME(model_famd_w)$out
+
+
+model_famd_sel_w <- polr(formula_spec_plus, data = famd, method=c("logistic"), weights = wreg,
+                     Hess = TRUE)
+summary(model_famd_sel_w)
+famd_marginal_w <- ocME(model_famd_sel_w)$out
 
 # Alternative method - oglmx
 #model_w <- oglmx(Club ~ pop_growth + y_o + spec_A  + spec_J + spec_K + spec_BE + spec_GI + BS + gfcf + scientists_share + capital + eqi_score + old_members, 
