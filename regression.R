@@ -228,10 +228,13 @@ famd[, c("time", "Club", "geo")] <- regression_data[, c("time", "Club", "geo")]
 knn <- knnImputation(regression_data %>% select(-any_of(c("time", "Club", "geo"))))
 
 
-
 ################################ Variable Standardization ####################################
-normalized_data <- apply(regression_data %>% select(-c("Club", "geo", "time", "capital", "metro", "urban", "rural", "old_members")),
-                                 2, scale) # substracting mean and dividing by standart deviation for each column = z-score
+normalized_data <- as_tibble(apply(regression_data %>% select(-c("Club", "geo", "time", "capital", "metro", "urban", "rural", "old_members")),
+                                 2, scale)) # substracting mean and dividing by standart deviation for each column = z-score
+normalized_famd <- imputeFAMD(normalized_data %>% select(-any_of(c("time", "Club", "geo"))),  ncp=3, scale=TRUE)$completeObs
+
+normalized_data[, c("time", "Club", "geo", "capital", "metro", "urban", "rural", "old_members")] <- regression_data[, c("time", "Club", "geo", "capital", "metro", "urban", "rural", "old_members")]
+normalized_famd[, c("time", "Club", "geo", "capital", "metro", "urban", "rural", "old_members")] <- normalized_data[, c("time", "Club", "geo", "capital", "metro", "urban", "rural", "old_members")]
 summary(normalized_data)
 
 ################################# Regression ##############################################
@@ -266,7 +269,7 @@ corrplot(
 formula_all <- Club ~ log_init_gdp +
                       gfcf +
                       pop_growth + y_o +
-                      spec_A  + spec_K + spec_BE + spec_GI + + spec_L + spec_RU + BS + 
+                      spec_A  + spec_K + spec_BE + spec_GI + spec_L + spec_RU + BS + 
                       scientists_share + patents + inno + ter_edu +
                       capital + metro + urban + rural +
                       old_members + eqi
@@ -275,7 +278,7 @@ formula_all <- Club ~ log_init_gdp +
 formula_init <- Club ~ log_init_gdp +
                        init_gfcf +
                        init_pop_growth + init_y_o +
-                       spec_A + spec_K + spec_BE + spec_GI  + spec_L + spec_RU + BS +
+                       spec_A + spec_K + spec_BE + spec_GI + spec_L  + spec_RU + BS +
                        init_scientists_share + init_patents + init_inno + init_ter_edu +
                        capital + metro + urban + rural +
                        old_members + init_eqi
@@ -306,14 +309,14 @@ formula_delta <- Club ~ delta_gfcf +
                                 
 #### ESTIMATION
 #model_test <- polr(formula_spec_plus, 
-#                   data = regression_data, method=c("logistic"), Hess = TRUE)
+#                   data = formula_spec_plus, method=c("logistic"), Hess = TRUE)
 #summary(model_test)
 #ocME(model_test)$out
 
 
 # Some basic look - using polr
 model <- polr(formula_all, 
-              data = regression_data, method=c("logistic"), Hess = TRUE)
+              data = normalized_data, method=c("logistic"), Hess = TRUE)
 summary(model)
 marginal <- ocME(model)$out
 
@@ -322,6 +325,12 @@ model_selected <- polr(formula_spec_plus,
                        data = regression_data, method=c("logistic"), Hess = TRUE)
 summary(model_selected)
 ocME(model_selected)$out
+
+
+model_selected_norm <- polr(formula_spec_plus,
+                            data = normalized_data, method=c("logistic"), Hess = TRUE)
+summary(model_selected_norm)
+ocME(model_selected_norm)$out
 
 
 ### Imputed FAMD:
@@ -337,23 +346,24 @@ summary(model_famd_selected) # stargazer(famd_marginal$out$ME.all) for latex pri
 famd_selected_marginal <- ocME(model_famd_selected)$out
 
 ### FAMD - initial conditions
-model_famd_init <- polr(formula_init, data = famd, method=c("logistic"), Hess = TRUE)
+model_famd_init <- polr(formula_init, data = famd, method=c("logistic"),
+                        Hess = TRUE, start=c(model_famd$coefficients, model_famd$zeta)) # was not convergig using model_famd as starting values
 summary(model_famd_init)
-ocME(model_famd_init)$out
+famd_init_marginal <- ocME(model_famd_init)$out
 
 ### FAMD - deltas
 model_famd_delta <- polr(formula_delta, data = famd, method=c("logistic"), Hess = TRUE)
 summary(model_famd_delta)
-ocME(model_famd_delta)
+ocME(model_famd_delta)$out
 ############# Weighted
-model_w <- polr(formula_all, data = regression_data, method = c("logistic"),
-                weights = wreg, Hess = TRUE)
-summary(model_w)
-margins_w <- ocME(model_w)$out
+model_selected_w <- polr(formula_spec_plus, data = regression_data, method = c("logistic"),
+                         weights = wreg, Hess = TRUE)
+summary(model_selected_w)
+margins_selected_w <- ocME(model_selected_w)$out
 
 
 model_famd_w <- polr(formula_all, data = famd, method=c("logistic"), weights = wreg,
-                     Hess = TRUE)
+                     start = c(model_famd$coefficients, model_famd$zeta), Hess = TRUE) # not converging
 summary(model_famd_w) # stargazer(famd_marginal$out$ME.all) for latex print-out
 famd_marginal_w <- ocME(model_famd_w)$out
 
@@ -371,10 +381,10 @@ famd_marginal_w <- ocME(model_famd_sel_w)$out
 
 
 ####### Reporting results:
-stargazer(marginal$ME.all)
+stargazer(famd_selected_marginal$ME.all)
 
 # Filtering only significant marginal effects.
-sapply(marginal, function(x){which(x[, 4] < 0.05)})
+sapply(famd_selected_marginal, function(x){which(x[, 4] < 0.2)})
 
 
 ###### TODOs + Suggestions:

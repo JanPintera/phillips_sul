@@ -9,6 +9,7 @@ library(tidyr)
 library(ggplot2)
 library(tidyverse)
 library(arrow)
+library(reshape2)
 
 source("functions.R")
 source("helper.R")
@@ -347,7 +348,19 @@ overall_ht<- foreach(b=c(1:length(ordering)), .combine = 'cbind')%:%
 
 clubweight <- as_tibble(do.call(cbind, merged_ht))
 #NOTE: the tail is there to get rid of the outlier
-colnames(clubweight) <- tail(unlist(convergence_clubs), n=length(unlist(convergence_clubs))-1) #TODO: double check the ordering, clubweight df should keep ordering the convergence_clubs
+colnames(clubweight) <- tail(unlist(convergence_clubs), n=length(unlist(convergence_clubs))-1) #TODO: double check the ordering, clubweight df should keep ordering of the convergence_clubs
+
+# Plotting the Transition paths:
+merged_ht_df <- as_tibble(do.call(cbind, merged_ht))
+colnames(merged_ht_df) <- tail(unlist(convergence_clubs), n=length(unlist(convergence_clubs))-1) 
+transition_path = merged_ht_df %>% add_column(year = unique(log_y_test$TIME)) %>% melt(id.vars = 'year', variable.name = 'geo') %>% 
+                                   mutate(club = case_when(geo %in%  convergence_clubs[[2]] ~ 1, # 1 is the outlier which we ignore
+                                                           geo %in%  convergence_clubs[[3]] ~ 2,
+                                                           geo %in%  convergence_clubs[[3]] ~ 3,
+                                                           geo %in%  convergence_clubs[[3]] ~ 4,
+                                                           geo %in%  convergence_clubs[[3]] ~ 5))
+ggplot(transition_path %>% filter(club == 1), aes(year, value)) + geom_line(aes(colour = geo))
+# unique(log_y_test$TIME)
 
 ############################ Plotting the clubs ###############################################
 Geo_plot<- Geo_nuts2[!Geo_nuts2$NUTS_ID %in% c("FRY1","FRY2","FRY3","ES70","PT20","PT30"),]
