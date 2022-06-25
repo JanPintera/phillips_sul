@@ -356,10 +356,16 @@ colnames(merged_ht_df) <- tail(unlist(convergence_clubs), n=length(unlist(conver
 transition_path = merged_ht_df %>% add_column(year = unique(log_y_test$TIME)) %>% melt(id.vars = 'year', variable.name = 'geo') %>% 
                                    mutate(club = case_when(geo %in%  convergence_clubs[[2]] ~ 1, # 1 is the outlier which we ignore
                                                            geo %in%  convergence_clubs[[3]] ~ 2,
-                                                           geo %in%  convergence_clubs[[3]] ~ 3,
-                                                           geo %in%  convergence_clubs[[3]] ~ 4,
-                                                           geo %in%  convergence_clubs[[3]] ~ 5))
-ggplot(transition_path %>% filter(club == 1), aes(year, value)) + geom_line(aes(colour = geo))
+                                                           geo %in%  convergence_clubs[[4]] ~ 3,
+                                                           geo %in%  convergence_clubs[[5]] ~ 4,
+                                                           geo %in%  convergence_clubs[[6]] ~ 5))
+ggplot(transition_path %>% filter(club == 2), aes(year, value)) + geom_line(aes(colour = geo)) + theme(legend.position = "none")
+transition_plots <- transition_path %>% group_by(club) %>% group_map(
+                                                           ~ ggplot(.) + aes(year, value) +
+                                                             geom_line(aes(colour = geo)) + 
+                                                             theme(legend.position = "none") +
+                                                             scale_color_grey()
+                                                           )
 # unique(log_y_test$TIME)
 
 ############################ Plotting the clubs ###############################################
