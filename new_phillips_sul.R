@@ -153,6 +153,8 @@ for(i in 2:(length(ordering)-1))
 }
 
 #### doing the initial t-test regression
+log_t_test_core(ordering) # overall, no convergence t-stat of -20.1101417 and coefficient -0.7577563
+
 t_stat <- log_t_test(ordering)
 
 k_star = core(t_stat) # get "Drop the highest and repeat" (t-test for 1st two is -35.89) -> I drop UKI3
@@ -178,10 +180,10 @@ tc_stat <- log_t_test_c(k_star, remaining)
 gr1_ind <- c(1:k_star, which(tc_stat>0))
 names_gr1<- remaining[gr1_ind]
 
-print(log_t_test_core(names_gr1[1:10]))
+print(log_t_test_core(names_gr1))
 # As the group defined by the `log_t_test_c` procedure does not convergence with t value of the test is -4.5643058 and coefficient -0.2965755 suggesting conditional
 # I try to keep only the core as Group 1, plus 4 regions that seem to be diverging from the group 2 when I try to include them:
-print(log_t_test_core(names_gr1[1:10])) # and this core group converges: t value of the test: 0.11267325, coeff.: 0.01935022
+t_test_gr1 <- log_t_test_core(names_gr1) # and this core group converges: t value of the test: 0.11267325, coeff.: 0.01935022
 #gr1_ind = 1:k_star # possibility to take only the code
 gr1_ind = 1:10 # this is chosen somewhat arbitrarily, 
 names_gr1<- remaining[gr1_ind]
@@ -202,7 +204,7 @@ tc_stat2 <- log_t_test_c(k_star2, remaining2)
 gr2_ind <- c(1:k_star2, which(tc_stat2>0))
 names_gr2<- remaining2[gr2_ind]
 
-print(log_t_test_core(names_gr2)) # Group 2 converges with t-stat 0.9303793 and coeff. 0.1460817
+t_test_gr2 <- log_t_test_core(names_gr2) # Group 2 converges with t-stat 0.9303793 and coeff. 0.1460817
 
 ################################# Third convergence group formation #####################################
 remaining3<- remaining2[-gr2_ind]
@@ -226,7 +228,8 @@ tc_stat3 <- log_t_test_c(k_star3, remaining3)
 gr3_ind <- c(1:k_star3, which(tc_stat3>0))
 names_gr3<- remaining3[gr3_ind]
 
-print(log_t_test_core(names_gr3)) # Group 3 converges with t-stat 1.9505306, coeff.: 0.1678917
+t_test_gr3 <- log_t_test_core(names_gr3) # Group 3 converges with t-stat 1.9505306, coeff.: 0.1678917
+
 
 ################################# Forth convergence group formation #####################################
 remaining4 <- remaining3[-gr3_ind]
@@ -243,8 +246,7 @@ tc_stat4 <- log_t_test_c(k_star4, remaining4)
 gr4_ind <- c(1:k_star4, which(tc_stat4>0))
 names_gr4<- remaining4[gr4_ind]
 
-print(log_t_test_core(names_gr4)) # Group 4 converges with t-stat 0.9868163, coeff.: 0.1012206
-
+t_test_gr4 <- log_t_test_core(names_gr4) # Group 4 converges with t-stat 0.9868163, coeff.: 0.1012206
 
 
 ################################# Fifth convergence group formation #####################################
@@ -261,7 +263,8 @@ tc_stat5 <- log_t_test_c(k_star5, remaining5)
 gr5_ind <- c(1:k_star5, which(tc_stat5>0))
 names_gr5<- remaining5[gr5_ind]
 
-print(log_t_test_core(names_gr5)) # Group 5 converges with t-stat 0.7458122 0.0919395
+t_test_gr5 <- log_t_test_core(names_gr5) # Group 5 converges with t-stat 0.7458122 0.0919395
+
 
 ################################# Sixth convergence group formation #####################################
 remaining6 <- remaining5[-gr5_ind]
@@ -277,7 +280,7 @@ tc_stat6 <- log_t_test_c(k_star6, remaining6)
 gr6_ind <- c(1:k_star6, which(tc_stat6>0))
 names_gr6<- remaining6[gr6_ind]
 
-print(log_t_test_core(names_gr6)) # Group 6 converges with t-stat 1.5301293, coeff: 0.1628613
+t_test_gr6 <- log_t_test_core(names_gr6) # Group 6 converges with t-stat 1.5301293, coeff: 0.1628613
 
 ################################# Seventh convergence group formation #####################################
 remaining7 <- remaining6[-gr6_ind]
@@ -285,6 +288,8 @@ remaining7 <- remaining6[-gr6_ind]
 print(log_t_test_core(remaining7)) # The whole remaining group is found convergent -0.96806120 -0.09627829
 
 names_gr7 <- remaining7
+
+t_test_gr7 <- log_t_test_core(names_gr7) # t-stat -0.96806120, coeff: -0.09627829
 
 ################################# Checking and Merging ##############################################
 # Overall, we have 7 convergence groups and two outliers: UKI3 and BE21
@@ -295,7 +300,7 @@ anyDuplicated(unlist(names_list))
 # "BE21" - is an outlier from the second group -> I attempt merging it with the second convergence club
 names_gr2_plus <- c(names_gr2, outlier_gr3)
 
-log_t_test_core(names_gr2_plus) # the group converges with t-stat 0.7101582 and coefficient 0.1084816
+t_test_gr2_plus <- log_t_test_core(names_gr2_plus) # the group converges with t-stat 0.7101582 and coefficient 0.1084816
 
 upd_names_gr2 <- c(names_gr2, outlier_gr3)
 
@@ -323,6 +328,8 @@ log_t_test_core(c(final_names_gr3, names_gr5)) # t-stat -1.4047701 and coefficie
 
 final_names_gr3 <- c(final_names_gr3, names_gr5)
 
+t_test_final_gr3 <- log_t_test_core(final_names_gr3) 
+
 # Adding group 6:
 log_t_test_core(c(final_names_gr3, names_gr6)) # no convergence: t-stat: -3.8173834
 
@@ -336,6 +343,23 @@ convergence_clubs<- list(outlier_gr1, names_gr1, upd_names_gr2, final_names_gr3,
 
 # Check if all regions are included:
 length(unlist(convergence_clubs)) == length(ordering)
+
+############################ Reporting stats #################################################
+club_statistics <- rbind(tibble(n=length(names_gr1), t_stat=t_test_gr1[1], coef=t_test_gr1[2]), 
+                         tibble(n=length(names_gr2), t_stat=t_test_gr2[1], coef=t_test_gr2[2]),
+                         tibble(n=length(names_gr3), t_stat=t_test_gr3[1], coef=t_test_gr3[2]),
+                         tibble(n=length(names_gr4), t_stat=t_test_gr4[1], coef=t_test_gr4[2]),
+                         tibble(n=length(names_gr5), t_stat=t_test_gr5[1], coef=t_test_gr5[2]),
+                         tibble(n=length(names_gr6), t_stat=t_test_gr6[1], coef=t_test_gr6[2]),
+                         tibble(n=length(names_gr7), t_stat=t_test_gr7[1], coef=t_test_gr7[2])
+                         )
+
+club_statistics_merged <- rbind(tibble(n=length(names_gr1), t_stat=t_test_gr1[1], coef=t_test_gr1[2]),
+                                tibble(n=length(upd_names_gr2), t_stat=t_test_gr2_plus[1], coef=t_test_gr2_plus[2]),
+                                tibble(n=length(final_names_gr3), t_stat=t_test_final_gr3[1], coef=t_test_final_gr3[2]),
+                                tibble(n=length(names_gr6), t_stat=t_test_gr6[1], coef=t_test_gr6[2]),
+                                tibble(n=length(names_gr7), t_stat=t_test_gr7[1], coef=t_test_gr7[2])
+                               )
 
 ############################ Transition Paths #################################################
 # Enabling eventual visualization of the transition paths, by first calculation the h_t for each convergence club
@@ -364,9 +388,10 @@ transition_plots <- transition_path %>% group_by(club) %>% group_map(
                                                            ~ ggplot(.) + aes(year, value) +
                                                              geom_line(aes(colour = geo)) + 
                                                              theme(legend.position = "none") +
-                                                             scale_color_grey()
+                                                             labs(y = "Relative Transition Coefficient", x = "Time") +
+                                                             scale_color_grey() +
+                                                             geom_hline(yintercept=1, linetype="dashed", color = "red")
                                                            )
-# unique(log_y_test$TIME)
 
 ############################ Plotting the clubs ###############################################
 Geo_plot<- Geo_nuts2[!Geo_nuts2$NUTS_ID %in% c("FRY1","FRY2","FRY3","ES70","PT20","PT30"),]

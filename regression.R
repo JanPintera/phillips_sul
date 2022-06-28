@@ -77,7 +77,7 @@ for( i in seq_along(specialisation))
 }
 
 # Getting diffs of the spec vars to be later joined with the exo_data
-spec_deltas <- exo_data %>% filter(time >= 2008) %>%
+spec_deltas <- exo_data %>% filter(time >= 2008) %>% # TODO: got "`funs()` was deprecated in dplyr 0.8.0", check if results are correct.
                group_by(geo) %>% summarise_at(vars(starts_with('spec')),
                                                    funs(last(na.omit(.), order_by = time) - 
                                                           first(na.omit(.), order_by = time))) %>%
@@ -189,7 +189,7 @@ gov_quality <- read_csv("qog_eqi_agg_2017.csv") %>%
                )
 
 ################################ Regression weights ############################################
-clubweight <- clubweight %>% select(order(colnames(clubweight))) # NOTE! this has to have the same order as regression_data below
+clubweight <- clubweight %>% select(order(colnames(clubweight))) # NOTE! this has to have the same order as regression_data below, TODO: check!
 wreg <- unlist(apply(clubweight, 2, function(x) mean(abs(x-1))^(-1)))
 wreg_df <- enframe(wreg, name = "geo", value = "wreg")
 
@@ -324,13 +324,13 @@ marginal <- ocME(model)$out
 model_selected <- polr(formula_spec_plus, 
                        data = regression_data, method=c("logistic"), Hess = TRUE)
 summary(model_selected)
-ocME(model_selected)$out
+selected_marginal <- ocME(model_selected)$out
 
 
 model_selected_norm <- polr(formula_spec_plus,
                             data = normalized_data, method=c("logistic"), Hess = TRUE)
 summary(model_selected_norm)
-ocME(model_selected_norm)$out
+selected_marginal_norm <- ocME(model_selected_norm)$out
 
 
 ### Imputed FAMD:
@@ -354,12 +354,12 @@ famd_init_marginal <- ocME(model_famd_init)$out
 ### FAMD - deltas
 model_famd_delta <- polr(formula_delta, data = famd, method=c("logistic"), Hess = TRUE)
 summary(model_famd_delta)
-ocME(model_famd_delta)$out
+famd_delta_marginal <- ocME(model_famd_delta)$out
 ############# Weighted
 model_selected_w <- polr(formula_spec_plus, data = regression_data, method = c("logistic"),
                          weights = wreg, Hess = TRUE)
 summary(model_selected_w)
-margins_selected_w <- ocME(model_selected_w)$out
+selected_marginal_w <- ocME(model_selected_w)$out
 
 
 model_famd_w <- polr(formula_all, data = famd, method=c("logistic"), weights = wreg,
@@ -384,7 +384,7 @@ famd_marginal_w <- ocME(model_famd_sel_w)$out
 stargazer(famd_selected_marginal$ME.all)
 
 # Filtering only significant marginal effects.
-sapply(famd_selected_marginal, function(x){which(x[, 4] < 0.2)})
+sapply(famd_delta_marginal, function(x){which(x[, 4] < 0.2)})
 
 
 ###### TODOs + Suggestions:
