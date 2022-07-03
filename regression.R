@@ -217,6 +217,7 @@ regression_data <- exo_data %>% filter(time == 2008 & Club > 0) %>% # Taking yea
   
 
 sum(complete.cases(regression_data)) # missigness problems
+
 ################################# Imputation - FAMD #########################################################
 
 famd <- imputeFAMD(regression_data %>% select(-any_of(c("time", "Club", "geo"))),
@@ -243,7 +244,7 @@ summary(normalized_data)
 ## Most interesting seems probably the result for industry (compare to the Cutrini's industrial core stuff)
 ## The emphasis on scientists seem to be confirmed
 
-#### DESCRIPTIVE ANALYSIS
+####################################š DESCRIPTIVE ANALYSIS ##################################
 summary(regression_data %>% select(-c("capital", "metro", "urban", "rural", "old_members")))
 
 summary(famd %>% select(-c("capital", "metro", "urban", "rural", "old_members")))
@@ -251,19 +252,39 @@ summary(famd %>% select(-c("capital", "metro", "urban", "rural", "old_members"))
 # Dummy variables - contingency tables
 lapply(regression_data[, c("Club", "capital", "metro", "urban", "rural", "old_members")], table)
 
-ftable(xtabs(~ Club + capital + metro + urban + rural + old_members,
-             data = regression_data))
+ftable(xtabs(~ Club + capital + metro + urban + rural + old_members, data = regression_data))
+ftable(xtabs(~ Club + capital + metro , data = regression_data)) # top club is 6:4 formed by capitals
+
 
 # Correlation matrices
 regression_data_corr <- regression_data %>% select(-c(geo, time)) %>% mutate(Club = as.integer(Club))
-cor(regression_data_corr, use = "complete.obs")
+corrplot(cor(regression_data_corr, use = "complete.obs")) # not really readable
 
+# Correlation 
 corrplot(
   cor(regression_data_corr %>% select(!starts_with('init')), use = "complete.obs")
 )
 
+# Human capital variables correlation - ter_edu and scientists_share look least correlated, can be used together
+corrplot(cor(regression_data_corr %>% select(patents, ter_edu, scientists_share, inno), use = "complete.obs"))
+corrplot(cor(regression_data_corr %>% select(init_patents ,init_ter_edu, init_scientists_share, init_inno), use = "complete.obs"))
 
-#### FORMULAS
+# Capital and finance spec.correlation:
+cor(regression_data_corr %>% select(spec_K, capital), use = "complete.obs") #0.4081713, but see below spec_K has way higher avg value in Club 1 than elsewhere
+
+#### Clubs - descriptive stats 
+regression_data %>% group_by(Club) %>% summarise(log_init_gdp = mean(log_init_gdp),
+                                                 spec_K = mean(spec_K, na.rm=TRUE),
+                                                 spec_BE = mean(spec_BE, na.rm=TRUE),
+                                                 spec_GI = mean(spec_GI, na.rm=TRUE),
+                                                 spec_RU = mean(spec_RU, na.rm=TRUE),
+                                                 BS = mean(BS, na.rm=TRUE),
+                                                 init_inno = mean(init_inno, na.rm=TRUE),
+                                                 init_eqi = mean(init_eqi, na.rm=TRUE)
+                                                 )
+
+
+################## FORMULAS
 # i.e.listing the "basic" versions of the variables = init conditions for specs and mean for the others
 # NOTE: this is meant more as an overview than anything else the polr does not converge
 formula_all <- Club ~ log_init_gdp +
@@ -284,20 +305,23 @@ formula_init <- Club ~ log_init_gdp +
                        old_members + init_eqi
 
                        
-# Formula using specifically chosen limited set of variables - the specialisations (wo Real Estate), Eurostat innovation index, Quality of governance and urban/rural distinction
+# Formula using specifically chosen limited set of variables - the specialisations (wo Real Estate), Eurostat innovation index, Quality of governance and capital/metro distinction
+# These are variables than seem to give more interpretable results - alternatives (such as urban/rural) are used elsewhere, epecially in formula_init_alter
 formula_spec_plus <- Club ~ log_init_gdp +
-                            spec_A + spec_K + spec_BE + spec_GI   + spec_RU + BS +
+                            spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS +
                             init_inno + 
-                            urban + rural +
+                            capital + metro + # more significant than urban + rural, spec_K loses signif. 
                             init_eqi
 
 # Version of formula without variables with a lot of missing vars - robustness check
-# vars with a lot of missing stuff = spec_L, init_inno
+# vars with a lot of missing stuff = spec_L
 formula_init_nans <- Club ~ log_init_gdp +
+                     init_gfcf +
+                     init_pop_growth + init_y_o +
                      spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS +
-                     init_inno + 
-                     urban + rural +
-                     init_eqi
+                     init_scientists_share + init_patents + init_inno + init_ter_edu +
+                     capital + metro + urban + rural +
+                     old_members + init_eqi
                                 
 # Formula showing changes
                             
@@ -306,12 +330,24 @@ formula_delta <- Club ~ delta_gfcf +
                  delta_inno + 
                  urban + rural +
                  delta_eqi
+
+# testing vars omitted from formula_spec_plus
+formula_init_alter <- Club ~ #init_pop_growth + init_y_o +
+                             log_init_gdp +
+                             spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS +  
+                             init_patents + init_ter_edu +
+                             urban + rural + init_eqi #+ old_members
+
+
+# New Economic Geography vars (this is mainly agglomeration concentration) + those inspired by Iammarino (2017)
+formula_neg <- Club ~ pop_growth + init_patents + init_ter_edu + capital + metro
+                        
                                 
 #### ESTIMATION
-#model_test <- polr(formula_spec_plus, 
-#                   data = formula_spec_plus, method=c("logistic"), Hess = TRUE)
-#summary(model_test)
-#ocME(model_test)$out
+model_test <- polr(formula_init_alter, 
+                   data = famd, method=c("logistic"), Hess = TRUE)
+summary(model_test)
+ocME(model_test)$out
 
 
 # Some basic look - using polr
@@ -351,6 +387,13 @@ model_famd_init <- polr(formula_init, data = famd, method=c("logistic"),
 summary(model_famd_init)
 famd_init_marginal <- ocME(model_famd_init)$out
 
+### FAMD - omitted vars = variables left out from the main regression
+
+model_famd_alter <- polr(formula_init_alter, 
+                         data = famd, method=c("logistic"), Hess = TRUE)
+summary(model_famd_alter)
+famd_init_alter_marginal <- ocME(model_famd_alter)$out
+
 ### FAMD - deltas
 model_famd_delta <- polr(formula_delta, data = famd, method=c("logistic"), Hess = TRUE)
 summary(model_famd_delta)
@@ -384,7 +427,7 @@ famd_marginal_w <- ocME(model_famd_sel_w)$out
 stargazer(famd_selected_marginal$ME.all)
 
 # Filtering only significant marginal effects.
-sapply(famd_delta_marginal, function(x){which(x[, 4] < 0.2)})
+sapply(famd_init_alter_marginal, function(x){which(x[, 4] < 0.05)})
 
 
 ###### TODOs + Suggestions:
