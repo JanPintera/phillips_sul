@@ -15,6 +15,7 @@ library(corrplot)
 
 source("functions.R")
 source("helper.R")
+source("regression_functions.R")
 # NOTE: source(new_phillips_sul.R) I need convergence_clubs, clubweight etc.
 ################################ Base file ########################################################
 #exo_data <- income_data %>% select(Year, GEO)
@@ -118,16 +119,16 @@ y_o <- get_eurostat("demo_r_pjanaggr3", time_format = "num", type = "code", filt
 
 
 scientists<- get_eurostat("rd_p_persreg", time_format = "num", 
-                          type = "code", filters = list(prof_pos="RSE", sectperf = "BES", sex="T",
+                          type = "code", filters = list(prof_pos="RSE", sectperf = "TOTAL", sex="T",
                                                        time=c(2008:2019), unit="PC_ACT_FTE")) %>%
-                         filter(geo %in% nuts2_regions) %>%
+                         filter(geo %in% nuts2_regions) %>% mutate(values = values / 100) %>%
                          group_by(geo) %>% summarise(scientists_share = mean(values, na.rm = TRUE),
                                                      init_scientists_share = first(na.omit(values), order_by = time), #NOTE: we have quite a few missing here, I take first non-null value
                                                      delta_scientist_share = last(na.omit(values), order_by = time) - first(na.omit(values), order_by = time))
 
 tertiary_educated <- get_eurostat("edat_lfse_04", time_format = "num", 
                         type = "code",filters = list(isced11="ED5-8", time=c(2008:2019), sex="T")) %>%
-                     group_by(geo) %>% summarize(ter_edu = mean(values, na.rm = TRUE),
+                     group_by(geo) %>% mutate(values = values / 100) %>% summarize(ter_edu = mean(values, na.rm = TRUE),
                                                  init_ter_edu = first(na.omit(values), order_by = time),
                                                  delta_ter_edu = last(values, order_by = time) - first(values, order_by = time))
 
@@ -151,10 +152,10 @@ inno_index <- read_excel("EIS_Data.xlsx") %>% rename(nuts = Region, time = Year,
 # Gross fixed capital formation
 gfcf <- get_eurostat('nama_10r_2gfcf', time_format = "num", type = "code",
                      filters = list(currency = "MIO_EUR", nace_r2 = "TOTAL", time=c(2008:2019))) %>%
-                     filter(geo %in% nuts2_regions) %>%
-                     group_by(geo) %>% summarise(gfcf = mean(values, na.rm = TRUE)/1000,
-                                                 init_gfcf = first(values)/1000,
-                                                 delta_gfcf = last(values, order_by = time)/1000 - first(values, order_by = time)/1000
+                     filter(geo %in% nuts2_regions) %>% mutate(log_values = log(values)) %>%
+                     group_by(geo) %>% summarise(gfcf = mean(log_values, na.rm = TRUE),
+                                                 init_gfcf = first(log_values),
+                                                 delta_gfcf = last(log_values, order_by = time) - first(log_values, order_by = time)
                                                 )
 
 
@@ -253,14 +254,14 @@ summary(famd %>% select(-c("capital", "metro", "urban", "rural", "old_members"))
 lapply(regression_data[, c("Club", "capital", "metro", "urban", "rural", "old_members")], table)
 
 ftable(xtabs(~ Club + capital + metro + urban + rural + old_members, data = regression_data))
-ftable(xtabs(~ Club + capital + metro , data = regression_data)) # top club is 6:4 formed by capitals
+ftable(xtabs(~ Club + capital + metro , data = regression_data)) # top club is 6:4 formed by capitals
 
 
-# Correlation matrices
+#### Correlation matrices
 regression_data_corr <- regression_data %>% select(-c(geo, time)) %>% mutate(Club = as.integer(Club))
 corrplot(cor(regression_data_corr, use = "complete.obs")) # not really readable
 
-# Correlation 
+# Correlation
 corrplot(
   cor(regression_data_corr %>% select(!starts_with('init')), use = "complete.obs")
 )
@@ -269,11 +270,14 @@ corrplot(
 corrplot(cor(regression_data_corr %>% select(patents, ter_edu, scientists_share, inno), use = "complete.obs"))
 corrplot(cor(regression_data_corr %>% select(init_patents ,init_ter_edu, init_scientists_share, init_inno), use = "complete.obs"))
 
+corrplot(cor(regression_data_corr %>% select(inno, eqi, patents, ter_edu, scientists_share),  use = "complete.obs")) # inno and eqi two are strongly correlated! Patents less
+
 # Capital and finance spec.correlation:
 cor(regression_data_corr %>% select(spec_K, capital), use = "complete.obs") #0.4081713, but see below spec_K has way higher avg value in Club 1 than elsewhere
 
 #### Clubs - descriptive stats 
 regression_data %>% group_by(Club) %>% summarise(log_init_gdp = mean(log_init_gdp),
+                                                 spec_A = mean(spec_A, na.rm=TRUE),
                                                  spec_K = mean(spec_K, na.rm=TRUE),
                                                  spec_BE = mean(spec_BE, na.rm=TRUE),
                                                  spec_GI = mean(spec_GI, na.rm=TRUE),
@@ -307,10 +311,10 @@ formula_init <- Club ~ log_init_gdp +
                        
 # Formula using specifically chosen limited set of variables - the specialisations (wo Real Estate), Eurostat innovation index, Quality of governance and capital/metro distinction
 # These are variables than seem to give more interpretable results - alternatives (such as urban/rural) are used elsewhere, epecially in formula_init_alter
-formula_spec_plus <- Club ~ log_init_gdp +
+formula_spec_plus <- Club ~ log_init_gdp + init_gfcf +
                             spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS +
-                            init_inno + 
-                            capital + metro + # more significant than urban + rural, spec_K loses signif. 
+                            init_scientists_share + init_ter_edu + # note inno and eqi being strongly correlated
+                            capital + metro +# more significant than urban + rural, spec_K loses signif. + more in line with NEG 
                             init_eqi
 
 # Version of formula without variables with a lot of missing vars - robustness check
@@ -323,19 +327,19 @@ formula_init_nans <- Club ~ log_init_gdp +
                      capital + metro + urban + rural +
                      old_members + init_eqi
                                 
-# Formula showing changes
+# Formula showing changes, delta change of formula_spec_plus
                             
 formula_delta <- Club ~ delta_gfcf +
                  spec_A_delta + spec_K_delta + spec_BE_delta + spec_GI_delta  + spec_L_delta + spec_RU_delta + delta_BS +
-                 delta_inno + 
-                 urban + rural +
+                 delta_scientist_share + delta_ter_edu +
+                 capital + metro +
                  delta_eqi
 
 # testing vars omitted from formula_spec_plus
 formula_init_alter <- Club ~ #init_pop_growth + init_y_o +
-                             log_init_gdp +
+                             log_init_gdp + init_gfcf +
                              spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS +  
-                             init_patents + init_ter_edu +
+                             init_inno +
                              urban + rural + init_eqi #+ old_members
 
 
@@ -343,11 +347,16 @@ formula_init_alter <- Club ~ #init_pop_growth + init_y_o +
 formula_neg <- Club ~ pop_growth + init_patents + init_ter_edu + capital + metro
                         
                                 
-#### ESTIMATION
-model_test <- polr(formula_init_alter, 
-                   data = famd, method=c("logistic"), Hess = TRUE)
-summary(model_test)
-ocME(model_test)$out
+######################################### ESTIMATION #########################
+#formula_test <- Club ~ log_init_gdp + init_gfcf +
+#  spec_K + spec_BE + spec_GI + spec_RU + BS +
+#  init_scientists_share + init_ter_edu + # note inno and eqi being strongly correlated
+#  capital + metro +# more significant than urban + rural, spec_K loses signif. + more in line with NEG 
+#  init_eqi
+#model_test <- polr(formula_test, 
+#                   data = famd, method=c("logistic"), Hess = TRUE)
+#summary(model_test)
+#ocME(model_test)$out
 
 
 # Some basic look - using polr
@@ -392,12 +401,24 @@ famd_init_marginal <- ocME(model_famd_init)$out
 model_famd_alter <- polr(formula_init_alter, 
                          data = famd, method=c("logistic"), Hess = TRUE)
 summary(model_famd_alter)
-famd_init_alter_marginal <- ocME(model_famd_alter)$out
+famd_alter_marginal <- ocME(model_famd_alter)$out
 
 ### FAMD - deltas
 model_famd_delta <- polr(formula_delta, data = famd, method=c("logistic"), Hess = TRUE)
 summary(model_famd_delta)
 famd_delta_marginal <- ocME(model_famd_delta)$out
+
+### FAMD - norm
+model_famd_selected_norm <- polr(formula_spec_plus, data = normalized_famd, method=c("logistic"), Hess = TRUE)
+summary(model_famd_selected_norm) # stargazer(famd_marginal$out$ME.all) for latex print-out
+famd_sel_marginal_norm <- ocME(model_famd_selected_norm)$out
+
+
+model_famd_alter_norm <- polr(formula_init_alter, 
+                              data = normalized_famd, method=c("logistic"), Hess = TRUE)
+summary(model_famd_alter_norm)
+famd_alter_marginal_norm <- ocME(model_famd_alter_norm)$out
+
 ############# Weighted
 model_selected_w <- polr(formula_spec_plus, data = regression_data, method = c("logistic"),
                          weights = wreg, Hess = TRUE)
@@ -416,18 +437,29 @@ model_famd_sel_w <- polr(formula_spec_plus, data = famd, method=c("logistic"), w
 summary(model_famd_sel_w)
 famd_marginal_w <- ocME(model_famd_sel_w)$out
 
-# Alternative method - oglmx
-#model_w <- oglmx(Club ~ pop_growth + y_o + spec_A  + spec_J + spec_K + spec_BE + spec_GI + BS + gfcf + scientists_share + capital + eqi_score + old_members, 
-#      data = famd, link="logit", weights=wreg)
-#summary(model_w)
-#margins.oglmx(model_w)
+#### Alternative method - robust std. errors
 
+# Robust Errors for model_famd_selected
+coeftest(model_famd_selected, vcov = sandwich) # https://stackoverflow.com/questions/27367974/different-robust-standard-errors-of-logit-regression-in-stata-and-r
+famd_selected_marg_robust <- ocME_robust(model_famd_selected)$out
+
+# model_famd_selected_norm
+coeftest(model_famd_selected_norm, vcov = sandwich)
+famd_sel_marg_norm_robust <- ocME_robust(model_famd_selected_norm)$out
+
+# model_famd_alter - robust std err
+coeftest(model_famd_alter, vcov = sandwich)
+famd_alter_marg_robust <- ocME_robust(model_famd_alter)$out
+
+# model_famd_delta - robust std err
+coeftest(model_famd_delta, vcov = sandwich)
+famd_delta_marg_robust <- ocME_robust(model_famd_delta)$out
 
 ####### Reporting results:
-stargazer(famd_selected_marginal$ME.all)
+stargazer(famd_delta_marginal$ME.all)
 
 # Filtering only significant marginal effects.
-sapply(famd_init_alter_marginal, function(x){which(x[, 4] < 0.05)})
+sapply(famd_delta_marg_robust, function(x){which(x[, 4] < 0.05)})
 
 
 ###### TODOs + Suggestions:
