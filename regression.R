@@ -109,6 +109,13 @@ pop_growth <- get_eurostat("demo_r_gind3", time_format = "num",
                                                       delta_pop_growth = last(values, order_by = time) - first(values, order_by = time))
 
 
+net_migration <- get_eurostat("demo_r_gind3", time_format = "num", 
+                              type = "code", filters = list(indic_de="CNMIGRATRT", time=c(2008:2019))) %>%
+                              filter(geo %in% nuts2_regions) %>% group_by(geo) %>%
+                              summarise(migration = gm_mean(values),
+                                        init_migration = first(values, order_by = time))
+
+
 y_o <- get_eurostat("demo_r_pjanaggr3", time_format = "num", type = "code", filters = list(age = c("Y_LT15", "Y_GE65"),
                                         time=c(2008:2019), sex="T")) %>% filter(geo %in% nuts2_regions) %>%
                                         pivot_wider(names_from = age, values_from = values) %>%
@@ -214,7 +221,8 @@ regression_data <- exo_data %>% filter(time == 2008 & Club > 0) %>% # Taking yea
                    left_join(wreg_df) %>%
                    left_join(gdp_per_cap) %>%
                    left_join(patents) %>%
-                   left_join(inno_index)
+                   left_join(inno_index) %>%
+                   left_join(net_migration)
   
 
 sum(complete.cases(regression_data)) # missigness problems
@@ -342,9 +350,17 @@ formula_init_alter <- Club ~ #init_pop_growth + init_y_o +
                              init_inno +
                              urban + rural + init_eqi #+ old_members
 
+# formula_spec_plus w init_patent instead of scientists - should be used with normalized data only due to patents variable scale
+formula_patent <- Club ~ log_init_gdp + init_gfcf +
+                  spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS +
+                  init_patents +
+                  capital + metro +# more significant than urban + rural, spec_K loses signif. + more in line with NEG 
+                  init_eqi
+
 
 # New Economic Geography vars (this is mainly agglomeration concentration) + those inspired by Iammarino (2017)
-formula_neg <- Club ~ pop_growth + init_patents + init_ter_edu + capital + metro
+# NEG = agglomeration effects vs. labour migration and knowledge spillovers, physical connectivity alone should not work
+formula_neg <- Club ~ capital + metro + init_migration
                         
                                 
 ######################################### ESTIMATION #########################
@@ -419,6 +435,14 @@ model_famd_alter_norm <- polr(formula_init_alter,
 summary(model_famd_alter_norm)
 famd_alter_marginal_norm <- ocME(model_famd_alter_norm)$out
 
+
+
+# patents have positive and significant effect
+model_famd_patent_norm <- polr(formula_patent, 
+                              data = normalized_famd, method=c("logistic"), Hess = TRUE)
+summary(model_famd_patent_norm)
+famd_patent_marginal_norm <- ocME(model_famd_patent_norm)$out
+
 ############# Weighted
 model_selected_w <- polr(formula_spec_plus, data = regression_data, method = c("logistic"),
                          weights = wreg, Hess = TRUE)
@@ -436,6 +460,11 @@ model_famd_sel_w <- polr(formula_spec_plus, data = famd, method=c("logistic"), w
                      Hess = TRUE)
 summary(model_famd_sel_w)
 famd_marginal_w <- ocME(model_famd_sel_w)$out
+
+#### NEG:
+
+model_neg <- polr(formula_neg, data = regression_data, method=c("logistic"), Hess = TRUE)
+ocME(model_neg)$out
 
 #### Alternative method - robust std. errors
 
