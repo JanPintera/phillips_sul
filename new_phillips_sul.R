@@ -374,7 +374,7 @@ clubweight <- as_tibble(do.call(cbind, merged_ht))
 #NOTE: the tail is there to get rid of the outlier
 colnames(clubweight) <- tail(unlist(convergence_clubs), n=length(unlist(convergence_clubs))-1) #TODO: double check the ordering, clubweight df should keep ordering of the convergence_clubs
 
-# Plotting the Transition paths:
+# Plotting the Transition paths - vol. 1, each club in detail:
 merged_ht_df <- as_tibble(do.call(cbind, merged_ht))
 colnames(merged_ht_df) <- tail(unlist(convergence_clubs), n=length(unlist(convergence_clubs))-1) 
 transition_path = merged_ht_df %>% add_column(year = unique(log_y_test$TIME)) %>% melt(id.vars = 'year', variable.name = 'geo') %>% 
@@ -383,7 +383,8 @@ transition_path = merged_ht_df %>% add_column(year = unique(log_y_test$TIME)) %>
                                                            geo %in%  convergence_clubs[[4]] ~ 3,
                                                            geo %in%  convergence_clubs[[5]] ~ 4,
                                                            geo %in%  convergence_clubs[[6]] ~ 5))
-ggplot(transition_path %>% filter(club == 2), aes(year, value)) + geom_line(aes(colour = geo)) + theme(legend.position = "none")
+#ggplot(transition_path %>% filter(club == 2), aes(year, value)) + geom_line(aes(colour = geo)) + theme(legend.position = "none")
+# Fig. RTC_mer_club1 - 5
 transition_plots <- transition_path %>% group_by(club) %>% group_map(
                                                            ~ ggplot(.) + aes(year, value) +
                                                              geom_line(aes(colour = geo)) + 
@@ -393,6 +394,23 @@ transition_plots <- transition_path %>% group_by(club) %>% group_map(
                                                              geom_hline(yintercept=1, linetype="dashed", color = "red")
                                                            )
 
+# Plotting the Transition paths - vol. 2, club averages:
+colnames(overall_ht) <- unlist(ordering)
+overall_5_df <- as_tibble(overall_ht) %>% add_column(year = unique(log_y_test$TIME)) %>%
+                                          melt(id.vars = 'year', variable.name = 'geo') %>%
+                                          mutate(club = case_when(geo %in%  convergence_clubs[[2]] ~ 1, # 1 is the outlier which we ignore
+                                                 geo %in%  convergence_clubs[[3]] ~ 2,
+                                                 geo %in%  convergence_clubs[[4]] ~ 3,
+                                                 geo %in%  convergence_clubs[[5]] ~ 4,
+                                                 geo %in%  convergence_clubs[[6]] ~ 5,
+                                                 TRUE~ 0))
+
+  
+ggplot(overall_5_df %>% group_by(club, year) %>% summarise(mean_ht = mean(value)),
+       aes(x=year, y=mean_ht, group=club)) + geom_line() +
+       scale_color_grey() +
+       geom_hline(yintercept=1, linetype="dashed", color = "red") +
+       labs(y = "Relative Transition Coefficient", x = "Time")
 ############################ Plotting the clubs ###############################################
 Geo_plot<- Geo_nuts2[!Geo_nuts2$NUTS_ID %in% c("FRY1","FRY2","FRY3","ES70","PT20","PT30"),]
 # TODO: investigate the projection string:
