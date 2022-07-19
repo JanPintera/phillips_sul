@@ -344,6 +344,15 @@ convergence_clubs<- list(outlier_gr1, names_gr1, upd_names_gr2, final_names_gr3,
 # Check if all regions are included:
 length(unlist(convergence_clubs)) == length(ordering)
 
+named_clubs <- complete_data %>% rename(geo = code) %>% mutate(club = case_when(geo %in%  convergence_clubs[[2]] ~ 1, # 1 is the outlier which we ignore
+                                                                                geo %in%  convergence_clubs[[3]] ~ 2,
+                                                                                geo %in%  convergence_clubs[[4]] ~ 3,
+                                                                                geo %in%  convergence_clubs[[5]] ~ 4,
+                                                                                geo %in%  convergence_clubs[[6]] ~ 5)) %>%
+                                 select(geo, GEO_LABEL, club) %>% unique() %>% drop_na() %>% arrange(club)
+
+View(named_clubs %>% filter(club == 4) %>% select(GEO_LABEL, geo))
+
 ############################ Reporting stats #################################################
 club_statistics <- rbind(tibble(n=length(names_gr1), t_stat=t_test_gr1[1], coef=t_test_gr1[2]), 
                          tibble(n=length(names_gr2), t_stat=t_test_gr2[1], coef=t_test_gr2[2]),
