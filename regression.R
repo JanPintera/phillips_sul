@@ -11,7 +11,7 @@ library(stargazer)
 library(DMwR)
 library(oglmx)
 library(corrplot)
-
+library(sandwich)
 
 source("functions.R")
 source("helper.R")
@@ -41,7 +41,16 @@ gdp_per_cap <- complete_data %>% filter(time == 2008) %>% rename(geo = code,
                                                           mutate(log_init_gdp = log(init_gdp)) %>%
                                                           select(geo, log_init_gdp)
 
+last_gdp_per_cap <- complete_data %>% filter(time == 2019) %>% rename(geo = code, final_gdp = value_complete) %>%
+                                                               mutate(log_final_gdp = log(final_gdp)) %>%
+                                                               select(geo, log_final_gdp)
+
+delta_gdp <- gdp_per_cap %>% inner_join(last_gdp_per_cap) %>% mutate(delta_gdp = log_final_gdp - log_init_gdp) %>% select(geo, delta_gdp, log_final_gdp)
+
+#avg_gdp <- complete_data %>% rename(geo = code, gdp = value_complete) %>% mutate(log_gdp = log(gdp)) %>% group_by(geo) %>% summarise(avg_gdp = mean(log_gdp))
+
 #### Specialization
+#### for nace rev.1.1 see lfst_r_lfe2en1
 ## DO: K = Financial and insurance activities,
 ##     J = Information and communication (largely contained in the BS below),
 ##     A = Agriculture, forestry and fishing, B-E = Industry (except construction)
@@ -196,6 +205,59 @@ gov_quality <- read_csv("qog_eqi_agg_2017.csv") %>%
                  delta_eqi = last(eqi_score, order_by = year) - first(eqi_score, order_by = year)
                )
 
+# Finding the richest neighbor - original data
+neigh_list <- read_parquet("data-processed/neigh_income.parquet") # last_gdp_per_cap
+neigh_income <- neigh_list %>% unnest(neighs, keep_empty = TRUE) %>% left_join(gdp_per_cap, by=c('neighs'='geo')) %>% group_by(geo) %>%
+                summarise(neigh_highest_income = max(log_init_gdp), neigh_avg_income = mean(log_init_gdp))%>% replace_na(list(neigh_highest_income=0)) #NOTE: change replace_na for different missingness treatment
+
+############################### ECOSYS-Robustness ##############################################
+# formula_spec_plus
+# pre-2008 NACE Rev.1.1 specializations
+# NOTE: apart from specialization we just need to redownload the data, there is little bit of code repetition but I prefer not to touch the original
+gdp_per_cap_ecosys <- complete_data %>% filter(time == 2003) %>% rename(geo = code, init_gdp = value_complete) %>% 
+                                        mutate(log_init_gdp = log(init_gdp)) %>% select(geo, log_init_gdp)
+
+specialisation_emp_rev11 <- get_eurostat("lfst_r_lfe2en1", time_format = "num", type = "code") %>% 
+                                         filter(nace_r1 %in% c("A_B", "C-E", "J_K", "G-I")
+                                                & between(time, 2003, 2008) # 2008 is the last year for NACE Rev 1.1
+                                                & age == "Y15-64"
+                                                & sex == 'T')
+
+specialisation_emp_rev11_total <- get_eurostat("lfst_r_lfe2en1", time_format = "num", type = "code") %>% filter(nace_r1 == 'TOTAL' & between(time, 2003, 2008) & age == "Y15-64" & sex == 'T')
+
+specialisation_rev11 <- specialisation_emp_rev11 %>% 
+                        inner_join(specialisation_emp_rev11_total, by = c("geo", "time"), 
+                                  suffix = c("", "_total")) %>%
+                        mutate(spec = values/values_total) %>%
+                        filter(geo %in% nuts2_regions) %>% select(geo, time, nace_r1, spec) %>%
+                        pivot_wider(names_from = nace_r1, values_from = spec) %>% plyr::rename(c("A_B" = "spec_AB", "C-E" = "spec_CE", "G-I" = "spec_GI", "J_K" = "spec_JK")) %>%  #I concentrate on inits here due to little compatibility between the two NACE revisions
+                        group_by(geo) %>% summarise_at(vars(starts_with('spec')),
+                                                       funs(first(., order_by = time)))
+
+#bs_ecosys <- get_eurostat("sbs_r_nuts03", time_format = "num", type = "code") NOTE: I don't see easy way to map the NACE Rev.2 categories to Rev.11
+
+gfcf_ecosys <- get_eurostat('nama_10r_2gfcf', time_format = "num", type = "code") %>% filter(currency == "MIO_EUR" & nace_r2 == "TOTAL" & between(time, 2003, 2019) & geo %in% nuts2_regions) %>% 
+                            mutate(log_values = log(values)) %>% group_by(geo) %>%
+                            summarise(gfcf = mean(log_values, na.rm = TRUE),
+                                      init_gfcf = first(log_values, order_by = time),
+                                      delta_gfcf = last(log_values, order_by = time) - first(log_values, order_by = time))
+
+scientists_ecosys <- get_eurostat("rd_p_persreg", time_format = "num", type = "code") %>%
+                                 filter(prof_pos=="RSE" & sectperf=="TOTAL" & sex=="T" & between(time, 2003, 2019) & unit=="PC_ACT_FTE" & geo %in% nuts2_regions) %>% mutate(values = values / 100) %>%
+                                  group_by(geo) %>% summarise(scientists_share = mean(values, na.rm = TRUE),
+                                                            init_scientists_share = first(values, order_by = time),
+                                                            delta_scientist_share = last(values, order_by = time) - first(values, order_by = time)
+                                                            )
+
+tertiary_educated_ecosys <- get_eurostat("edat_lfse_04", time_format = "num", type = "code") %>% filter(isced11=="ED5-8" & between(time, 2003, 2019) & sex=="T") %>%
+                                        filter(geo %in% nuts2_regions) %>% mutate(values = values / 100) %>% group_by(geo) %>% summarize(ter_edu = mean(values, na.rm = TRUE),
+                                                                                                                                         init_ter_edu = first(values, order_by = time),
+                                                                                                                                         delta_ter_edu = last(values, order_by = time) - first(values, order_by = time))
+
+# Finding the richest neighbor
+neigh_income_ecosys <- neigh_list %>% unnest(neighs, keep_empty = TRUE) %>% left_join(gdp_per_cap_ecosys, by=c('neighs'='geo')) %>% group_by(geo) %>%
+  summarise(neigh_highest_income = max(log_init_gdp))%>% replace_na(list(neigh_highest_income=0)) #NOTE: change replace_na for different missingness treatment
+
 ################################ Regression weights ############################################
 clubweight <- clubweight %>% select(order(colnames(clubweight))) # NOTE! this has to have the same order as regression_data below, TODO: check!
 wreg <- unlist(apply(clubweight, 2, function(x) mean(abs(x-1))^(-1)))
@@ -227,11 +289,33 @@ regression_data <- exo_data %>% filter(time == 2008 & Club > 0) %>% # Taking yea
 
 sum(complete.cases(regression_data)) # missigness problems
 
+regression_data_neigh <- data.frame(regression_data) %>% left_join(neigh_income)
+
+################################## Robustness - ECOSYS reviewers suggestions
+
+regression_data_robustness <- data.frame(regression_data) %>% select(time, geo, Club, capital, metro)
+regression_data_robustness <- regression_data_robustness %>%
+                              left_join(gdp_per_cap_ecosys) %>%
+                              left_join(specialisation_rev11) %>%
+                              left_join(gfcf_ecosys) %>%
+                              left_join(scientists_ecosys) %>%
+                              left_join(tertiary_educated_ecosys) %>%
+                              left_join(neigh_income_ecosys)
+
+famd_robustness <-imputeFAMD(regression_data_robustness %>% select(-any_of(c("time", "Club", "geo"))),
+                             ncp=3, scale=TRUE)$completeObs
+famd_robustness[, c("time", "Club", "geo")] <- regression_data_robustness[, c("time", "Club", "geo")]
+
 ################################# Imputation - FAMD #########################################################
 
 famd <- imputeFAMD(regression_data %>% select(-any_of(c("time", "Club", "geo"))),
                    ncp=3, scale=TRUE)$completeObs
 famd[, c("time", "Club", "geo")] <- regression_data[, c("time", "Club", "geo")]
+
+
+famd_neigh <- imputeFAMD(regression_data_neigh %>% select(-any_of(c("time", "Club", "geo"))),
+                   ncp=3, scale=TRUE)$completeObs
+famd_neigh[, c("time", "Club", "geo")] <- regression_data_neigh[, c("time", "Club", "geo")]
 
 
 ################################ Imputation - kNN ################################################
@@ -262,11 +346,11 @@ summary(famd %>% select(-c("capital", "metro", "urban", "rural", "old_members"))
 lapply(regression_data[, c("Club", "capital", "metro", "urban", "rural", "old_members")], table)
 
 ftable(xtabs(~ Club + capital + metro + urban + rural + old_members, data = regression_data))
-ftable(xtabs(~ Club + capital + metro , data = regression_data)) # top club is 6:4 formed by capitals
+#ftable(xtabs(~ Club + capital + metro , data = regression_data)) # top club is 6:4 formed by capitals
 
 
 #### Correlation matrices
-regression_data_corr <- regression_data %>% select(-c(geo, time)) %>% mutate(Club = as.integer(Club))
+regression_data_corr <- regression_data_neigh %>% select(-c(geo, time)) %>% mutate(Club = as.integer(Club))
 corrplot(cor(regression_data_corr, use = "complete.obs")) # not really readable
 
 # Correlation
@@ -280,20 +364,41 @@ corrplot(cor(regression_data_corr %>% select(init_patents ,init_ter_edu, init_sc
 
 corrplot(cor(regression_data_corr %>% select(inno, eqi, patents, ter_edu, scientists_share),  use = "complete.obs")) # inno and eqi two are strongly correlated! Patents less
 
+corrplot(cor(regression_data_corr %>% select(Club, neigh_highest_income, neigh_avg_income, init_inno, init_ter_edu, init_patents, init_scientists_share),  use = "complete.obs"))
+
 # Capital and finance spec.correlation:
 cor(regression_data_corr %>% select(spec_K, capital), use = "complete.obs") #0.4081713, but see below spec_K has way higher avg value in Club 1 than elsewhere
 
-#### Clubs - descriptive stats 
+
+#### Clubs - descriptive stats, see formula_spec_plus (see below for capital and metro)
 regression_data %>% group_by(Club) %>% summarise(log_init_gdp = mean(log_init_gdp),
+                                                 init_gfcf = mean(init_gfcf, na.rm=TRUE),
                                                  spec_A = mean(spec_A, na.rm=TRUE),
                                                  spec_K = mean(spec_K, na.rm=TRUE),
                                                  spec_BE = mean(spec_BE, na.rm=TRUE),
                                                  spec_GI = mean(spec_GI, na.rm=TRUE),
                                                  spec_RU = mean(spec_RU, na.rm=TRUE),
                                                  BS = mean(BS, na.rm=TRUE),
-                                                 init_inno = mean(init_inno, na.rm=TRUE),
+                                                 init_scientists_share = mean(init_scientists_share, na.rm=TRUE),
+                                                 init_ter_edu = mean(init_ter_edu, na.rm=TRUE),
                                                  init_eqi = mean(init_eqi, na.rm=TRUE)
                                                  )
+ftable(xtabs(~ Club + capital + metro , data = regression_data)) # top club is 6:4 formed by capitals
+
+
+# get summary
+regression_data_gdp <- complete_data %>% filter(time == 2003) %>% rename(geo = code, init_gdp = value_complete) %>%
+                                         mutate(log_init_gdp = log(init_gdp)) %>% inner_join(exo_data) %>% select(geo, time, Club, init_gdp, log_init_gdp)
+delta_gdp_ecosys <- regression_data_gdp %>% inner_join(last_gdp_per_cap) %>% mutate(delta_gdp = log_final_gdp - log_init_gdp) %>% select(geo, delta_gdp, log_final_gdp)
+regression_data_gdp <- regression_data_gdp %>% left_join(delta_gdp_ecosys)
+#regression_data_gdp <- regression_data %>% left_join(delta_gdp) # NOTE! This is for 2008, change!
+regression_data_gdp %>% group_by(Club) %>% summarise(mean_log_init_gdp = mean(log_init_gdp),
+                                                     mean_log_final_gdp = mean(log_final_gdp),
+                                                     delta_gdp = mean(delta_gdp),
+                                                     sd_log_init_gdp = sd(log_init_gdp),
+                                                     sd_log_final_gdp = sd(log_final_gdp))
+
+# to latex, code from here seems to be useful https://sdaza.com/blog/2020/descriptive-tables/?fbclid=IwAR1qAgC6nxk1UTuqi3fWy5oW0zXQs2uQitkUNAFJuvRCT9nh8UHuwoEHgAY
 
 
 ################## FORMULAS
@@ -338,7 +443,7 @@ formula_init_nans <- Club ~ log_init_gdp +
 # Formula showing changes, delta change of formula_spec_plus
                             
 formula_delta <- Club ~ delta_gfcf +
-                 spec_A_delta + spec_K_delta + spec_BE_delta + spec_GI_delta  + spec_L_delta + spec_RU_delta + delta_BS +
+                 spec_A_delta + spec_K_delta + spec_BE_delta + spec_GI_delta + spec_RU_delta + delta_BS +
                  delta_scientist_share + delta_ter_edu +
                  capital + metro +
                  delta_eqi
@@ -357,12 +462,28 @@ formula_patent <- Club ~ log_init_gdp + init_gfcf +
                   capital + metro +# more significant than urban + rural, spec_K loses signif. + more in line with NEG 
                   init_eqi
 
+# Formula using variables suggested in the ecosys review on top of the `formula_spec_plus`
+formula_spec_plus_ecosys <- Club ~ log_init_gdp + init_gfcf +
+                                   spec_AB + spec_JK + spec_CE + spec_GI +
+                                   init_scientists_share + init_ter_edu + capital + metro  + neigh_highest_income
 
 # New Economic Geography vars (this is mainly agglomeration concentration) + those inspired by Iammarino (2017)
 # NEG = agglomeration effects vs. labour migration and knowledge spillovers, physical connectivity alone should not work
 formula_neg <- Club ~ capital + metro + init_migration
+
+# suggested by ecosys review - same as formula_spec_plus but with added neigh variable
+formula_spec_neigh <- Club ~ log_init_gdp + init_gfcf +
+                             spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS +
+                             init_scientists_share + init_ter_edu + # note inno and eqi being strongly correlated
+                             capital + metro +# more significant than urban + rural, spec_K loses signif. + more in line with NEG 
+                             init_eqi + neigh_highest_income # highest init gdp of the neigh regions
+
+formula_spec_neigh2 <- Club ~ log_init_gdp + init_gfcf +
+                      spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS +
+                      init_scientists_share + init_ter_edu + # note inno and eqi being strongly correlated
+                      capital + metro +
+                      init_eqi + neigh_avg_income # using the avg.init gdp of neigh regions here
                         
-                                
 ######################################### ESTIMATION #########################
 #formula_test <- Club ~ log_init_gdp + init_gfcf +
 #  spec_K + spec_BE + spec_GI + spec_RU + BS +
@@ -470,7 +591,7 @@ ocME(model_neg)$out
 
 # Robust Errors for model_famd_selected
 coeftest(model_famd_selected, vcov = sandwich) # https://stackoverflow.com/questions/27367974/different-robust-standard-errors-of-logit-regression-in-stata-and-r
-famd_selected_marg_robust <- ocME_robust(model_famd_selected)$out
+famd_selected_marg_robust <- ocME_robust(model_famd_selected)$out #NOTE: this appears in the text
 
 # model_famd_selected_norm
 coeftest(model_famd_selected_norm, vcov = sandwich)
@@ -484,8 +605,26 @@ famd_alter_marg_robust <- ocME_robust(model_famd_alter)$out
 coeftest(model_famd_delta, vcov = sandwich)
 famd_delta_marg_robust <- ocME_robust(model_famd_delta)$out
 
+############ Ecosys - robustness
+# 2003 init specializations
+model_famd_selected_ecosys <- polr(formula_spec_plus_ecosys, data = famd_robustness, method=c("logistic"), Hess = TRUE)
+summary(model_famd_selected_ecosys)
+famd_selected_marginal_ecosys <- ocME(model_famd_selected_ecosys)$out
+coeftest(model_famd_selected_ecosys, vcov = sandwich)
+famd_selected_marginal_ecosys_robust <- ocME_robust(model_famd_selected_ecosys)$out
+
+# adding highest neighbour income to the original data
+model_famd_neigh <- polr(formula_spec_neigh, data = famd_neigh, method=c("logistic"), Hess = TRUE)
+famd_selected_marginal_neigh <- ocME(model_famd_neigh)$out
+famd_selected_marginal_neigh_robust <- ocME_robust(model_famd_neigh)$out
+
+model_famd_neigh2 <- polr(formula_spec_neigh2, data = famd_neigh, method=c("logistic"), Hess = TRUE)
+famd_selected_marginal_neigh_robust2 <- ocME_robust(model_famd_neigh2)$out
+
 ####### Reporting results:
 stargazer(famd_delta_marginal$ME.all)
+stargazer(famd_selected_marginal_ecosys_robust$ME.all)
+
 
 # Filtering only significant marginal effects.
 sapply(famd_delta_marg_robust, function(x){which(x[, 4] < 0.05)})
@@ -493,4 +632,8 @@ sapply(famd_delta_marg_robust, function(x){which(x[, 4] < 0.05)})
 
 ###### TODOs + Suggestions:
 ### Add some descriptive statistics?
+
+###################### Write-outs ##########################
+write_parquet(exo_data, "data-processed/exo_data.parquet")
+write_parquet(regression_data, "data-processed/regression_data.parquet")
 

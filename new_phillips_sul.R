@@ -110,6 +110,13 @@ geo_nb<-poly2nb(Geo_nuts2)
 nb<-nb2listw(geo_nb, zero.policy=TRUE, style="B")
 moran.test(dat$values, nb, zero.policy=TRUE, randomisation = FALSE)
 
+# Finding a neighbouring regions
+neigh_regions = poly2nb(Geo_nuts2, row.names=Geo_nuts2@data$NUTS_ID)
+neigh_income <- tibble(geo=Geo_nuts2@data$NUTS_ID) %>% add_column(neighs = NA)
+for (x in 1:length(neigh_income$geo)) {
+  neigh_income$neighs[x] <- list(Geo_nuts2@data$NUTS_ID[neigh_regions[[x]]])
+}
+
 
 # Using previously defined function (functions.R) for all possible years, for years 2003-2019, the others have missing in them
 
@@ -153,7 +160,7 @@ for(i in 2:(length(ordering)-1))
 }
 
 #### doing the initial t-test regression
-log_t_test_core(ordering) # overall, no convergence t-stat of -20.1101417 and coefficient -0.7577563
+log_t_test_core(ordering) # overall, no convergence t-stat of -20.1101417 and coefficient -0.7577563, p-value: 2.914e-12
 
 t_stat <- log_t_test(ordering)
 
@@ -446,5 +453,6 @@ ggplot(data=Geo_ggplot, aes(long, lat, fill= Club, group = group
 
 ###################### Write-outs ##########################
 write_parquet(income_data, "data-processed/income_data.parquet")
-write_parquet(income_data, "data-processed/convergence_clubs.parquet")
+write_parquet(convergence_clubs, "data-processed/convergence_clubs.parquet")
+write_parquet(neigh_income, "data-processed/neigh_income.parquet")
 
