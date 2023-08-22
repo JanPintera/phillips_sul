@@ -205,10 +205,31 @@ gov_quality <- read_csv("qog_eqi_agg_2017.csv") %>%
                  delta_eqi = last(eqi_score, order_by = year) - first(eqi_score, order_by = year)
                )
 
-# Finding the richest neighbor - original data
+## Finding the richest neighbor - original data
 neigh_list <- read_parquet("data-processed/neigh_income.parquet") # last_gdp_per_cap
-neigh_income <- neigh_list %>% unnest(neighs, keep_empty = TRUE) %>% left_join(gdp_per_cap, by=c('neighs'='geo')) %>% group_by(geo) %>%
-                summarise(neigh_highest_income = max(log_init_gdp), neigh_avg_income = mean(log_init_gdp))%>% replace_na(list(neigh_highest_income=0)) #NOTE: change replace_na for different missingness treatment
+no_land_neigh_regions <- neigh_list %>% filter(lengths(neighs) == 0) %>% select(geo) %>% as.list() # getting regions with no neighbours
+# fixing mosthly GR regions - lot of islands close to mainland, neigh_list effectively maps land borders, region wo border are exclusively island, this mostl make sense (e.g. Mallorca) but especially GR it is too strict - 
+# manual_neighs uses discretion to remap the regions 
+manual_neighs <- tibble(geo = c("EL30", "EL30", "EL30", "EL41", "EL41", "EL41", "EL42", "EL42", "EL42", "EL42", "EL43", "EL62", "EL62", "EL51", "EL51", "EL51", "EL51","EL54", "EL54", "EL54", "EL54", "EL63", "EL63", "EL63", "EL63", "EL63", "EL64", "EL64", "EL64", "EL64", "EL64", "EL64", "EL65", "EL65", "EL65"),
+                     neighs = c("EL64", "EL65", "EL42", "EL42", "EL51", "EL64", "EL41", "EL64", "EL43", "EL30", "EL42", "EL63", "EL54", "BG41", "BG42", "EL52", "EL41","EL53", "EL61", "EL63", "EL62", "EL65", "EL54", "EL61", "EL64", "EL62", "EL30", "EL61", "EL63", "EL65", "EL41", "EL42", "EL30", "EL63", "EL65"))
+manual_neighs <- bind_rows(manual_neighs, tibble(geo=c("ITG1", "ITF5", "ITF5", "ITG2", "FRM0"), neighs=c("ITF6", "ITF5", "ITG1", "FRM0", "ITG2"))) # fixing insular Italy + Corsica
+manual_neighs <- bind_rows(manual_neighs, tibble(geo=c("FI20", "FI1C", "FI1C", "FI1C", "FI1C"), neighs=c("FI1C", "FI19", "FI1B", "FI1D", "FI20"))) # Aaland
+manual_neigh_income <- manual_neighs %>% left_join(gdp_per_cap, by=c('neighs'='geo')) %>% left_join(last_gdp_per_cap, by=c('neighs'='geo')) %>% group_by(geo) %>%
+                                   summarise(neigh_highest_income = max(log_init_gdp), delta_highest_income = max(log_final_gdp) - max(log_init_gdp),
+                                             neigh_avg_income = mean(log_init_gdp), delta_neigh_avg_income = mean(log_final_gdp) - mean(log_init_gdp))
+
+
+neigh_income <- neigh_list %>% unnest(neighs, keep_empty=TRUE) %>% # keep_empty=FALSE could be used for robustness
+                left_join(gdp_per_cap, by=c('neighs'='geo')) %>% left_join(last_gdp_per_cap, by=c('neighs'='geo')) %>% group_by(geo) %>%
+                summarise(neigh_highest_income = max(log_init_gdp),
+                          delta_highest_income = max(log_final_gdp) - max(log_init_gdp),
+                          neigh_avg_income = mean(log_init_gdp), 
+                          delta_neigh_avg_income = mean(log_final_gdp) - mean(log_init_gdp)) %>%
+                replace_na(list(neigh_highest_income=0, delta_highest_income=0, neigh_avg_income=0, delta_neigh_avg_income=0)) #NOTE: change replace_na for different missingness treatment
+
+# updating data with manually matched neighbours
+neigh_income <- neigh_income %>% rows_update(manual_neigh_income, by="geo")
+no_neigh_regions <- setdiff(no_land_neigh_regions$geo, manual_neighs$geo)
 
 ############################### ECOSYS-Robustness ##############################################
 # formula_spec_plus
@@ -256,8 +277,13 @@ tertiary_educated_ecosys <- get_eurostat("edat_lfse_04", time_format = "num", ty
 
 # Finding the richest neighbor
 neigh_income_ecosys <- neigh_list %>% unnest(neighs, keep_empty = TRUE) %>% left_join(gdp_per_cap_ecosys, by=c('neighs'='geo')) %>% group_by(geo) %>%
-  summarise(neigh_highest_income = max(log_init_gdp))%>% replace_na(list(neigh_highest_income=0)) #NOTE: change replace_na for different missingness treatment
+                                      summarise(neigh_highest_income = max(log_init_gdp), neigh_avg_income = mean(log_init_gdp))%>% replace_na(list(neigh_highest_income=0, neigh_avg_income=0)) #NOTE: change replace_na for different missingness treatment
 
+
+manual_neigh_income_ecosys <- manual_neighs %>% left_join(gdp_per_cap_ecosys, by=c('neighs'='geo')) %>% group_by(geo) %>%
+                                          summarise(neigh_highest_income = max(log_init_gdp), neigh_avg_income = mean(log_init_gdp))
+
+neigh_income_ecosys <- neigh_income_ecosys %>% rows_update(manual_neigh_income_ecosys, by="geo")
 ################################ Regression weights ############################################
 clubweight <- clubweight %>% select(order(colnames(clubweight))) # NOTE! this has to have the same order as regression_data below, TODO: check!
 wreg <- unlist(apply(clubweight, 2, function(x) mean(abs(x-1))^(-1)))
@@ -284,15 +310,16 @@ regression_data <- exo_data %>% filter(time == 2008 & Club > 0) %>% # Taking yea
                    left_join(gdp_per_cap) %>%
                    left_join(patents) %>%
                    left_join(inno_index) %>%
-                   left_join(net_migration)
-  
+                   left_join(net_migration) %>%
+                   mutate(border_region = ifelse(geo %in% border_regions, 1, 0))    
+
 
 sum(complete.cases(regression_data)) # missigness problems
 
-regression_data_neigh <- data.frame(regression_data) %>% left_join(neigh_income)
+regression_data_neigh <- data.frame(regression_data) %>% left_join(neigh_income) # isolation data with and without neighs
+regression_data_neigh_filtered <- regression_data_neigh  %>% filter(!geo %in% no_neigh_regions) # could be used for ROBUSTNESS - filtering out regions wo neighbours, while using them in inputation
 
 ################################## Robustness - ECOSYS reviewers suggestions
-
 regression_data_robustness <- data.frame(regression_data) %>% select(time, geo, Club, capital, metro)
 regression_data_robustness <- regression_data_robustness %>%
                               left_join(gdp_per_cap_ecosys) %>%
@@ -300,11 +327,17 @@ regression_data_robustness <- regression_data_robustness %>%
                               left_join(gfcf_ecosys) %>%
                               left_join(scientists_ecosys) %>%
                               left_join(tertiary_educated_ecosys) %>%
-                              left_join(neigh_income_ecosys)
+                              left_join(neigh_income_ecosys) %>%
+                              mutate(border_region = ifelse(geo %in% border_regions, 1, 0))  
+regression_data_robustness_filtered <- regression_data_robustness  %>% filter(!geo %in% no_neigh_regions) # could be used for ROBUSTNESS - filtering out regions wo neighbours, while using them in inputation
 
 famd_robustness <-imputeFAMD(regression_data_robustness %>% select(-any_of(c("time", "Club", "geo"))),
                              ncp=3, scale=TRUE)$completeObs
 famd_robustness[, c("time", "Club", "geo")] <- regression_data_robustness[, c("time", "Club", "geo")]
+
+famd_robustness_filtered <-imputeFAMD(regression_data_robustness_filtered %>% select(-any_of(c("time", "Club", "geo"))),
+                             ncp=3, scale=TRUE)$completeObs
+famd_robustness_filtered[, c("time", "Club", "geo")] <- regression_data_robustness_filtered[, c("time", "Club", "geo")]
 
 ################################# Imputation - FAMD #########################################################
 
@@ -317,6 +350,9 @@ famd_neigh <- imputeFAMD(regression_data_neigh %>% select(-any_of(c("time", "Clu
                    ncp=3, scale=TRUE)$completeObs
 famd_neigh[, c("time", "Club", "geo")] <- regression_data_neigh[, c("time", "Club", "geo")]
 
+famd_neigh_filtered <- imputeFAMD(regression_data_neigh_filtered %>% select(-any_of(c("time", "Club", "geo"))),
+                         ncp=3, scale=TRUE)$completeObs
+famd_neigh_filtered[, c("time", "Club", "geo")] <- regression_data_neigh_filtered[, c("time", "Club", "geo")]
 
 ################################ Imputation - kNN ################################################
 knn <- knnImputation(regression_data %>% select(-any_of(c("time", "Club", "geo"))))
@@ -364,14 +400,15 @@ corrplot(cor(regression_data_corr %>% select(init_patents ,init_ter_edu, init_sc
 
 corrplot(cor(regression_data_corr %>% select(inno, eqi, patents, ter_edu, scientists_share),  use = "complete.obs")) # inno and eqi two are strongly correlated! Patents less
 
-corrplot(cor(regression_data_corr %>% select(Club, neigh_highest_income, neigh_avg_income, init_inno, init_ter_edu, init_patents, init_scientists_share),  use = "complete.obs"))
+corrplot(cor(regression_data_corr %>% select(Club, neigh_highest_income, neigh_avg_income, init_eqi, init_inno, init_ter_edu, init_patents, init_scientists_share),  use = "complete.obs"))
 
 # Capital and finance spec.correlation:
 cor(regression_data_corr %>% select(spec_K, capital), use = "complete.obs") #0.4081713, but see below spec_K has way higher avg value in Club 1 than elsewhere
 
+ftable(xtabs(~ Club + capital + metro , data = regression_data)) # top club is 6:4 formed by capitals
 
-#### Clubs - descriptive stats, see formula_spec_plus (see below for capital and metro)
-regression_data %>% group_by(Club) %>% summarise(log_init_gdp = mean(log_init_gdp),
+#### Club descriptive statistics - descriptive stats, see formula_spec_plus (see below for capital and metro)
+var_stats <- regression_data_neigh %>% group_by(Club) %>% summarise(log_init_gdp = mean(log_init_gdp),
                                                  init_gfcf = mean(init_gfcf, na.rm=TRUE),
                                                  spec_A = mean(spec_A, na.rm=TRUE),
                                                  spec_K = mean(spec_K, na.rm=TRUE),
@@ -381,22 +418,37 @@ regression_data %>% group_by(Club) %>% summarise(log_init_gdp = mean(log_init_gd
                                                  BS = mean(BS, na.rm=TRUE),
                                                  init_scientists_share = mean(init_scientists_share, na.rm=TRUE),
                                                  init_ter_edu = mean(init_ter_edu, na.rm=TRUE),
-                                                 init_eqi = mean(init_eqi, na.rm=TRUE)
+                                                 init_eqi = mean(init_eqi, na.rm=TRUE),
+                                                 neigh_avg_income = mean(neigh_avg_income),
+                                                 neigh_highest_income = mean(neigh_highest_income)
                                                  )
-ftable(xtabs(~ Club + capital + metro , data = regression_data)) # top club is 6:4 formed by capitals
+#var_stats %>% kbl(caption="Summary Statistics of the Explanatory variables",
+#                  format="latex", col.names = c("Gender","Education","Count","Mean", "Bflm"), align="r")
 
+stargazer(regression_data_neigh_filtered, type = "latex", title="Explanatory variables")
 
-# get summary
+# get summary for convergence clubs both 2003-2015 and 2003-2019 versions
 regression_data_gdp <- complete_data %>% filter(time == 2003) %>% rename(geo = code, init_gdp = value_complete) %>%
                                          mutate(log_init_gdp = log(init_gdp)) %>% inner_join(exo_data) %>% select(geo, time, Club, init_gdp, log_init_gdp)
-delta_gdp_ecosys <- regression_data_gdp %>% inner_join(last_gdp_per_cap) %>% mutate(delta_gdp = log_final_gdp - log_init_gdp) %>% select(geo, delta_gdp, log_final_gdp)
-regression_data_gdp <- regression_data_gdp %>% left_join(delta_gdp_ecosys)
+delta_gdp_2019 <- regression_data_gdp %>% inner_join(last_gdp_per_cap) %>% mutate(delta_gdp = log_final_gdp - log_init_gdp) %>% select(geo, delta_gdp, log_final_gdp)
+regression_data_gdp_2019 <- regression_data_gdp %>% left_join(delta_gdp_2019)
 #regression_data_gdp <- regression_data %>% left_join(delta_gdp) # NOTE! This is for 2008, change!
-regression_data_gdp %>% group_by(Club) %>% summarise(mean_log_init_gdp = mean(log_init_gdp),
-                                                     mean_log_final_gdp = mean(log_final_gdp),
-                                                     delta_gdp = mean(delta_gdp),
-                                                     sd_log_init_gdp = sd(log_init_gdp),
-                                                     sd_log_final_gdp = sd(log_final_gdp))
+regression_data_gdp_2019 %>% group_by(Club) %>% summarise(mean_log_init_gdp = mean(log_init_gdp),
+                                                          mean_log_final_gdp = mean(log_final_gdp),
+                                                          delta_gdp = mean(delta_gdp),
+                                                          sd_log_init_gdp = sd(log_init_gdp),
+                                                          sd_log_final_gdp = sd(log_final_gdp))
+
+#2015
+last_gdp_per_cap_2015 <- complete_data %>% filter(time == 2015) %>% rename(geo = code, final_gdp = value_complete) %>%
+                                                               mutate(log_final_gdp = log(final_gdp)) %>% select(geo, log_final_gdp)
+delta_gdp_2015 <- regression_data_gdp %>% inner_join(last_gdp_per_cap_2015) %>% mutate(delta_gdp = log_final_gdp - log_init_gdp) %>% select(geo, delta_gdp, log_final_gdp)
+regression_data_gdp_2015 <- regression_data_gdp %>% left_join(delta_gdp_2015)
+regression_data_gdp_2015 %>% group_by(Club) %>% summarise(mean_log_init_gdp = mean(log_init_gdp),
+                                                          mean_log_final_gdp = mean(log_final_gdp),
+                                                          delta_gdp = mean(delta_gdp),
+                                                          sd_log_init_gdp = sd(log_init_gdp),
+                                                          sd_log_final_gdp = sd(log_final_gdp))
 
 # to latex, code from here seems to be useful https://sdaza.com/blog/2020/descriptive-tables/?fbclid=IwAR1qAgC6nxk1UTuqi3fWy5oW0zXQs2uQitkUNAFJuvRCT9nh8UHuwoEHgAY
 
@@ -428,7 +480,7 @@ formula_spec_plus <- Club ~ log_init_gdp + init_gfcf +
                             spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS +
                             init_scientists_share + init_ter_edu + # note inno and eqi being strongly correlated
                             capital + metro +# more significant than urban + rural, spec_K loses signif. + more in line with NEG 
-                            init_eqi
+                            init_eqi + border_region
 
 # Version of formula without variables with a lot of missing vars - robustness check
 # vars with a lot of missing stuff = spec_L
@@ -448,6 +500,12 @@ formula_delta <- Club ~ delta_gfcf +
                  capital + metro +
                  delta_eqi
 
+formula_delta_neigh <- Club ~ delta_gfcf +
+                       spec_A_delta + spec_K_delta + spec_BE_delta + spec_GI_delta + spec_RU_delta + delta_BS +
+                       delta_scientist_share + delta_ter_edu +
+                       capital + metro + delta_eqi + 
+                       delta_highest_income + delta_neigh_avg_income + border_region
+
 # testing vars omitted from formula_spec_plus
 formula_init_alter <- Club ~ #init_pop_growth + init_y_o +
                              log_init_gdp + init_gfcf +
@@ -462,27 +520,21 @@ formula_patent <- Club ~ log_init_gdp + init_gfcf +
                   capital + metro +# more significant than urban + rural, spec_K loses signif. + more in line with NEG 
                   init_eqi
 
-# Formula using variables suggested in the ecosys review on top of the `formula_spec_plus`
+# Formula using data starting 2003 suggested in the ecosys review, should be compared with `formula_spec_plus`
 formula_spec_plus_ecosys <- Club ~ log_init_gdp + init_gfcf +
                                    spec_AB + spec_JK + spec_CE + spec_GI +
-                                   init_scientists_share + init_ter_edu + capital + metro  + neigh_highest_income
+                                   init_scientists_share + init_ter_edu + capital + metro  + neigh_highest_income + neigh_avg_income + border_region
 
 # New Economic Geography vars (this is mainly agglomeration concentration) + those inspired by Iammarino (2017)
 # NEG = agglomeration effects vs. labour migration and knowledge spillovers, physical connectivity alone should not work
 formula_neg <- Club ~ capital + metro + init_migration
 
-# suggested by ecosys review - same as formula_spec_plus but with added neigh variable
+# suggested by ecosys review - same as formula_spec_plus but with added neigh variables
 formula_spec_neigh <- Club ~ log_init_gdp + init_gfcf +
-                             spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS +
-                             init_scientists_share + init_ter_edu + # note inno and eqi being strongly correlated
-                             capital + metro +# more significant than urban + rural, spec_K loses signif. + more in line with NEG 
-                             init_eqi + neigh_highest_income # highest init gdp of the neigh regions
-
-formula_spec_neigh2 <- Club ~ log_init_gdp + init_gfcf +
-                      spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS +
-                      init_scientists_share + init_ter_edu + # note inno and eqi being strongly correlated
-                      capital + metro +
-                      init_eqi + neigh_avg_income # using the avg.init gdp of neigh regions here
+                              spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS +
+                              init_scientists_share + init_ter_edu + # note inno and eqi being strongly correlated
+                              capital + metro + init_eqi +
+                              neigh_highest_income + neigh_avg_income + border_region # using the avg.init gdp of neigh regions here
                         
 ######################################### ESTIMATION #########################
 #formula_test <- Club ~ log_init_gdp + init_gfcf +
@@ -557,7 +609,6 @@ summary(model_famd_alter_norm)
 famd_alter_marginal_norm <- ocME(model_famd_alter_norm)$out
 
 
-
 # patents have positive and significant effect
 model_famd_patent_norm <- polr(formula_patent, 
                               data = normalized_famd, method=c("logistic"), Hess = TRUE)
@@ -608,26 +659,48 @@ famd_delta_marg_robust <- ocME_robust(model_famd_delta)$out
 ############ Ecosys - robustness
 # 2003 init specializations
 model_famd_selected_ecosys <- polr(formula_spec_plus_ecosys, data = famd_robustness, method=c("logistic"), Hess = TRUE)
-summary(model_famd_selected_ecosys)
 famd_selected_marginal_ecosys <- ocME(model_famd_selected_ecosys)$out
 coeftest(model_famd_selected_ecosys, vcov = sandwich)
 famd_selected_marginal_ecosys_robust <- ocME_robust(model_famd_selected_ecosys)$out
 
-# adding highest neighbour income to the original data
+# 2003 init specializations - Leaving the no neigh regions
+model_famd_selected_ecosys_filtered <- polr(formula_spec_plus_ecosys, data = famd_robustness_filtered, method=c("logistic"), Hess = TRUE)
+famd_selected_marginal_ecosys_robust_filtered <- ocME_robust(model_famd_selected_ecosys_filtered)$out
+
+# adding highest neighbour income to the original data - confirm the original formula_spec_plus conclusion - (strong scietists + industry)
 model_famd_neigh <- polr(formula_spec_neigh, data = famd_neigh, method=c("logistic"), Hess = TRUE)
 famd_selected_marginal_neigh <- ocME(model_famd_neigh)$out
 famd_selected_marginal_neigh_robust <- ocME_robust(model_famd_neigh)$out
 
-model_famd_neigh2 <- polr(formula_spec_neigh2, data = famd_neigh, method=c("logistic"), Hess = TRUE)
-famd_selected_marginal_neigh_robust2 <- ocME_robust(model_famd_neigh2)$out
+# Leaving the no neigh regions - Manufacturing effect is kept intact but init_scientists_share loses significance, init ter edu still has it
+model_famd_neigh_filtered <- polr(formula_spec_neigh, data = famd_neigh_filtered, method=c("logistic"), Hess = TRUE)
+famd_selected_marginal_neigh_robust_filtered <- ocME_robust(model_famd_neigh_filtered)$out
 
-####### Reporting results:
-stargazer(famd_delta_marginal$ME.all)
-stargazer(famd_selected_marginal_ecosys_robust$ME.all)
+# deltas -change in scientist share is significant, industry not really
+model_famd_delta_neigh <- polr(formula_delta_neigh, data = famd_neigh, method=c("logistic"), Hess = TRUE)
+famd_delta_marginal_neigh <- ocME_robust(model_famd_delta_neigh)$out
 
+model_famd_delta_neigh_filtered <- polr(formula_delta_neigh, data = famd_neigh_filtered, method=c("logistic"), Hess = TRUE)
+famd_delta_marginal_neigh_filtered <- ocME_robust(model_famd_delta_neigh_filtered)$out
+
+# checking alternative innovation metrics - current version tests adding border regions dummy
+famd_test <- famd %>% mutate(border_region = ifelse(geo %in% border_regions, 1, 0))
+formula_check <- Club ~ log_init_gdp + init_gfcf +
+                 spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS + init_scientists_share + init_ter_edu + # note inno and eqi being strongly correlated
+                 capital + metro +# more significant than urban + rural, spec_K loses signif. + more in line with NEG 
+                 init_eqi + border_region
+model_check <- polr(formula_check, data = famd_test, method=c("logistic"), Hess = TRUE)
+ocME_robust(model_check)$out
+########################## Reporting results:
+stargazer(famd_selected_marg_robust$ME.all) # orig. IES WP results + border region dummy
+stargazer(famd_delta_marginal_neigh_filtered$ME.all) # 2008-2019 deltas with neigh. variables and with neigh regions filtered out 
+stargazer(famd_selected_marginal_neigh_robust_filtered$ME.all) # 2008 values with neigh. variables and with neigh regions filtered out
+stargazer(famd_selected_marginal_ecosys_robust_filtered$ME.all) # 2003 init values
+
+stargazer(regression_data_neigh_filtered, type = "latex", title="Explanatory variables") # this is descriptive_vars_filtered
 
 # Filtering only significant marginal effects.
-sapply(famd_delta_marg_robust, function(x){which(x[, 4] < 0.05)})
+sapply(famd_selected_marginal_ecosys_robust_filtered, function(x){which(x[, 4] < 0.05)})
 
 
 ###### TODOs + Suggestions:
