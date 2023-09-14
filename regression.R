@@ -12,6 +12,7 @@ library(DMwR)
 library(oglmx)
 library(corrplot)
 library(sandwich)
+library(pscl)
 
 source("functions.R")
 source("helper.R")
@@ -404,6 +405,7 @@ corrplot(cor(regression_data_corr %>% select(Club, neigh_highest_income, neigh_a
 
 # Capital and finance spec.correlation:
 cor(regression_data_corr %>% select(spec_K, capital), use = "complete.obs") #0.4081713, but see below spec_K has way higher avg value in Club 1 than elsewhere
+cor(regression_data_corr %>% select(neigh_highest_income, neigh_avg_income), use = "complete.obs") # 0.8474535!
 
 ftable(xtabs(~ Club + capital + metro , data = regression_data)) # top club is 6:4 formed by capitals
 
@@ -523,7 +525,7 @@ formula_patent <- Club ~ log_init_gdp + init_gfcf +
 # Formula using data starting 2003 suggested in the ecosys review, should be compared with `formula_spec_plus`
 formula_spec_plus_ecosys <- Club ~ log_init_gdp + init_gfcf +
                                    spec_AB + spec_JK + spec_CE + spec_GI +
-                                   init_scientists_share + init_ter_edu + capital + metro  + neigh_highest_income + neigh_avg_income + border_region
+                                   init_scientists_share + init_ter_edu + capital + metro + neigh_highest_income + border_region
 
 # New Economic Geography vars (this is mainly agglomeration concentration) + those inspired by Iammarino (2017)
 # NEG = agglomeration effects vs. labour migration and knowledge spillovers, physical connectivity alone should not work
@@ -534,8 +536,15 @@ formula_spec_neigh <- Club ~ log_init_gdp + init_gfcf +
                               spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS +
                               init_scientists_share + init_ter_edu + # note inno and eqi being strongly correlated
                               capital + metro + init_eqi +
-                              neigh_highest_income + neigh_avg_income + border_region # using the avg.init gdp of neigh regions here
+                              neigh_highest_income + border_region # using the avg.init gdp of neigh regions here
                         
+# alternative specification for comparison purposes formula_spec1 = 
+formula_spec1  <- Club ~ log_init_gdp + init_gfcf +
+                  spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS +
+                  init_scientists_share + init_ter_edu
+
+formula_spec2 <- Club ~  log_init_gdp +init_gfcf + capital + metro + init_eqi + neigh_highest_income + border_region
+
 ######################################### ESTIMATION #########################
 #formula_test <- Club ~ log_init_gdp + init_gfcf +
 #  spec_K + spec_BE + spec_GI + spec_RU + BS +
@@ -683,28 +692,55 @@ famd_delta_marginal_neigh <- ocME_robust(model_famd_delta_neigh)$out
 model_famd_delta_neigh_filtered <- polr(formula_delta_neigh, data = famd_neigh_filtered, method=c("logistic"), Hess = TRUE)
 famd_delta_marginal_neigh_filtered <- ocME_robust(model_famd_delta_neigh_filtered)$out
 
-# checking alternative innovation metrics - current version tests adding border regions dummy
-famd_test <- famd %>% mutate(border_region = ifelse(geo %in% border_regions, 1, 0))
-formula_check <- Club ~ log_init_gdp + init_gfcf +
+# checking alternative innovation metrics - current version tests adding border regions dummy and neighbour variables.
+famd_test <- famd_neigh_filtered %>% #mutate(border_region = ifelse(geo %in% border_regions, 1, 0)) %>% 
+                      mutate(neigh_highest_avg_diff = neigh_highest_income - neigh_avg_income) %>% 
+                      mutate(distance2highest_income = neigh_highest_income - log_init_gdp) %>%
+                      mutate(distance2avg_income = neigh_avg_income - log_init_gdp) %>%
+                      inner_join((income_data %>% filter(Year==2008) %>% select(GEO, y_star)), by=c("geo" = "GEO"))
+
+formula_check <- Club ~ init_gfcf + log_init_gdp + #y_star +
                  spec_A + spec_K + spec_BE + spec_GI + spec_RU + BS + init_scientists_share + init_ter_edu + # note inno and eqi being strongly correlated
                  capital + metro +# more significant than urban + rural, spec_K loses signif. + more in line with NEG 
-                 init_eqi + border_region
+                 init_eqi  + distance2highest_income + neigh_avg_income + border_region
 model_check <- polr(formula_check, data = famd_test, method=c("logistic"), Hess = TRUE)
 ocME_robust(model_check)$out
+cor(famd_test %>% select(neigh_avg_income, log_init_gdp))
+cor(famd_test %>% select(neigh_highest_income, neigh_avg_income))
+########################## Specifications - complements to famd_delta_marginal_neigh_filtered
+# Specification 1
+#formula_spec1
+model_famd_filtered_spec1 <- polr(formula_spec1, data = famd_neigh_filtered, method=c("logistic"), Hess = TRUE)
+famd_filtered_marginal_spec1 <- ocME_robust(model_famd_filtered_spec1)$out
+
+model_famd_filtered_spec2 <- polr(formula_spec2, data = famd_neigh_filtered, method=c("logistic"), Hess = TRUE)
+famd_filtered_marginal_spec2 <- ocME_robust(model_famd_filtered_spec2)$out
+
 ########################## Reporting results:
 stargazer(famd_selected_marg_robust$ME.all) # orig. IES WP results + border region dummy
-stargazer(famd_delta_marginal_neigh_filtered$ME.all) # 2008-2019 deltas with neigh. variables and with neigh regions filtered out 
+stargazer(famd_filtered_marginal_spec1$ME.all) # Specification 1 - sectoral and human capital variables - for consistency, it is also filtered 
+stargazer(famd_filtered_marginal_spec2$ME.all) # Specification 2 - sectoral and human capital variables - for consistency, it is also filtered  
 stargazer(famd_selected_marginal_neigh_robust_filtered$ME.all) # 2008 values with neigh. variables and with neigh regions filtered out
 stargazer(famd_selected_marginal_ecosys_robust_filtered$ME.all) # 2003 init values
 
 stargazer(regression_data_neigh_filtered, type = "latex", title="Explanatory variables") # this is descriptive_vars_filtered
 
+stargazer(model_famd_filtered_spec1)
+stargazer(model_famd_filtered_spec2)
+stargazer(model_famd_neigh_filtered) # Regression results (Table 10)
+
 # Filtering only significant marginal effects.
 sapply(famd_selected_marginal_ecosys_robust_filtered, function(x){which(x[, 4] < 0.05)})
 
+#### Goodness of fit:
+#logLik(model_famd_filtered_spec1) #AIC(model_famd_filtered_spec1)
+pR2(model_famd_filtered_spec1)
+pR2(model_famd_filtered_spec2)
+pR2(model_famd_neigh_filtered)
+pR2(model_famd_selected)
+pR2(model_famd_selected_ecosys_filtered)
 
 ###### TODOs + Suggestions:
-### Add some descriptive statistics?
 
 ###################### Write-outs ##########################
 write_parquet(exo_data, "data-processed/exo_data.parquet")
