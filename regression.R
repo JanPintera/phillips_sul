@@ -20,6 +20,7 @@ source("regression_functions.R")
 # NOTE: source(new_phillips_sul.R) I need convergence_clubs, clubweight etc.
 ################################ Base file ########################################################
 #exo_data <- income_data %>% select(Year, GEO)
+convergence_clubs <- readRDS(file = "data-processed/convergence_clubs.rds")
 exo_data <- read_parquet("data-processed/income_data.parquet") %>% select(Year, GEO) %>%
               rename(geo=GEO, time = Year) %>% arrange(geo)
 
@@ -745,4 +746,4 @@ pR2(model_famd_selected_ecosys_filtered)
 ###################### Write-outs ##########################
 write_parquet(exo_data, "data-processed/exo_data.parquet")
 write_parquet(regression_data, "data-processed/regression_data.parquet")
-
+write_parquet(regression_data_robustness, "data-processed/regression_data_robustness.parquet")

@@ -453,6 +453,7 @@ ggplot(data=Geo_ggplot, aes(long, lat, fill= Club, group = group
 
 ###################### Write-outs ##########################
 write_parquet(income_data, "data-processed/income_data.parquet")
-write_parquet(convergence_clubs, "data-processed/convergence_clubs.parquet")
+saveRDS(convergence_clubs, file="data-processed/convergence_clubs.rds")
 write_parquet(neigh_income, "data-processed/neigh_income.parquet")
+write_parquet(complete_data, "data-processed/complete_data.parquet")
 
